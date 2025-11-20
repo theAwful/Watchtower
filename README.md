@@ -1,8 +1,9 @@
 # Watchtower
 
 A centralized infrastructure management application for penetration testing environments.
-
-![Connected](screenshots/Connected.png)
+<p align="center">
+  <img src="screenshots/Proxmox.png" width="600">
+</p>
 
 ## Overview
 
