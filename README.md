@@ -144,8 +144,6 @@ The built files will be in `frontend/dist/`. You can serve them with any static 
 - `VITE_ATLASSIAN_API_TOKEN`: Atlassian API token
 - `VITE_TRELLO_API_KEY`: Trello API key (for Task Board)
 - `VITE_TRELLO_API_TOKEN`: Trello API token
-- `VITE_PLEXTRAC_BASE_URL`: PlexTrac base URL (for Report Generator)
-- `VITE_PLEXTRAC_API_KEY`: PlexTrac API key
 
 ## Features
 
