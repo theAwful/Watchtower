@@ -2,6 +2,8 @@
 
 A centralized infrastructure management application for penetration testing environments.
 
+![Connected](screenshots/Connected.png)
+
 ## Overview
 
 Watchtower provides a unified dashboard for monitoring connected devices, managing virtual machines, accessing knowledge bases, and tracking tasks. It's designed as a centralized hub for pentesting infrastructure management.
