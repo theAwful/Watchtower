@@ -39,7 +39,6 @@ src/
 ├── models/          # Data layer - API services and business logic
 │   ├── ApiModel.js
 │   ├── AtlassianModel.js
-│   ├── PlexTracModel.js
 │   └── TrelloModel.js
 ├── views/           # Presentation layer - React components
 │   ├── components/  # Reusable UI components
