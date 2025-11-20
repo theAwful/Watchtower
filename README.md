@@ -2,7 +2,7 @@
 
 A centralized infrastructure management application for penetration testing environments.
 <p align="center">
-  <img src="screenshots/Proxmox.png" width="3600">
+  <img src="screenshots/Proxmox.png" width="5000">
 </p>
 
 ## Overview
