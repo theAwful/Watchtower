@@ -80,33 +80,36 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null, options = {
           const responseData = chunks.join('');
           
           // Check if we have any data
-          // Empty responses are valid for some Proxmox operations (like VM creation)
-          if (!responseData || responseData.trim().length === 0) {
+          const trimmed = responseData ? responseData.trim() : '';
+          const isEmpty = !trimmed || trimmed.length === 0;
+
+          if (isEmpty) {
             if (res.statusCode >= 400) {
               reject(new Error(`Proxmox API error: ${res.statusCode} - Empty response`));
             } else {
-              // Success with empty response (common for POST operations)
-              console.log(`Proxmox API returned empty response with status ${res.statusCode} - treating as success`);
+              console.log(`[Proxmox] Empty response body, status ${res.statusCode} - treating as success`);
               resolve(null);
             }
             return;
           }
-          
-          // Trim whitespace before parsing
-          const trimmed = responseData.trim();
+
+          // Debug: log what we got when response might be treated as null later
+          const willTreatAsNull = (res.statusCode >= 200 && res.statusCode < 300) &&
+            !trimmed.startsWith('{') && !trimmed.startsWith('[');
+          if (willTreatAsNull) {
+            console.log(`[Proxmox] Non-JSON 2xx response: status=${res.statusCode} content-type=${res.headers['content-type']} body(${trimmed.length})=${trimmed.substring(0, 300)}`);
+          }
           
           // Check Transfer-Encoding header - if chunked, we might need special handling
           const transferEncoding = res.headers['transfer-encoding'];
           if (transferEncoding && transferEncoding.toLowerCase().includes('chunked')) {
-            // Chunked encoding is already handled by Node.js, but log it for debugging
-            console.log('Response uses chunked transfer encoding');
+            console.log('[Proxmox] Response uses chunked transfer encoding');
           }
           
           // Validate that it looks like JSON (starts with { or [)
           if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
             // Proxmox sometimes returns non-JSON for successful POST (e.g. clone); treat 2xx as success
             if (res.statusCode >= 200 && res.statusCode < 300) {
-              console.log(`Proxmox API returned non-JSON with status ${res.statusCode} - treating as success`);
               resolve(null);
               return;
             }
@@ -152,9 +155,12 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null, options = {
             return;
           }
           
-          // Proxmox API always returns { data: [...] } format
-          // Return the data property if it exists, otherwise return the whole response
-          resolve(parsed.data !== undefined ? parsed.data : parsed);
+          // Proxmox API returns { data: ... } (json) or { data: ..., success: 1 } (extjs)
+          const result = parsed.data !== undefined ? parsed.data : parsed;
+          if (result === null && res.statusCode >= 200 && res.statusCode < 300) {
+            console.log(`[Proxmox] Parsed JSON but data was null: status=${res.statusCode} keys=${Object.keys(parsed).join(',')} raw=${trimmed.substring(0, 200)}`);
+          }
+          resolve(result);
         } catch (error) {
           console.error('Error processing response:', error);
           reject(new Error(`Failed to process Proxmox API response: ${error.message}`));
@@ -433,12 +439,12 @@ export async function getAvailableISOsAndTemplates(node) {
 }
 
 // Clone a VM
-// API: POST /api2/extjs/nodes/{node}/qemu/{vmid}/clone (extjs matches working Proxmox behavior)
+// API: POST /api2/json/nodes/{node}/qemu/{vmid}/clone (form-urlencoded body)
 export async function cloneVM(node, sourceVmid, newVmid, config) {
   try {
     const vmType = config.type || 'qemu';
     const endpoint = `/nodes/${node}/${vmType}/${sourceVmid}/clone`;
-    // Match working request: newid, name, target only (omit full when false for linked clone)
+    // Required: newid, name, target (pve-node0). Omit full for linked clone.
     const cloneConfig = {
       newid: parseInt(newVmid),
       name: config.name || `Clone of VM ${sourceVmid}`,
@@ -458,12 +464,12 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
     }
     
     console.log(`\n=== Cloning VM ===`);
-    console.log(`Source: ${sourceVmid}, New: ${newVmid}, Type: ${vmType}`);
-    console.log(`Config:`, JSON.stringify(cloneConfig, null, 2));
+    console.log(`POST ${PROXMOX_BASE_URL_JSON}${endpoint}`);
+    console.log(`Body: newid=${cloneConfig.newid} name=${cloneConfig.name} target=${cloneConfig.target}`);
     
     let result;
     try {
-      result = await proxmoxRequest(endpoint, 'POST', cloneConfig, { useExtjs: true });
+      result = await proxmoxRequest(endpoint, 'POST', cloneConfig);
       console.log(`Clone response:`, result);
     } catch (error) {
       // If the error is about parsing JSON but status was 200, clone might have succeeded
