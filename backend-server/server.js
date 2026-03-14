@@ -2,8 +2,11 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import net from 'net';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import * as proxmox from './proxmox.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = parseInt(process.env.PORT || '8080', 10);
 
@@ -560,6 +563,35 @@ app.put('/api/proxmox/vms/:node/:vmid/pool', async (req, res) => {
     });
   }
 });
+
+// Serve frontend build in production (single process: API + static UI)
+const frontendDist = path.resolve(__dirname, '..', 'frontend', 'dist');
+const indexHtml = path.join(frontendDist, 'index.html');
+let frontendExists = false;
+try {
+  const fs = await import('fs');
+  frontendExists = fs.existsSync(frontendDist) && fs.existsSync(indexHtml);
+} catch (_) {}
+
+if (frontendExists) {
+  app.use(express.static(frontendDist));
+  app.get(/^\/(?!api).*/, (req, res) => {
+    res.sendFile(indexHtml);
+  });
+  console.log('Serving frontend from', frontendDist);
+} else {
+  app.get(/^\/(?!api).*/, (req, res) => {
+    res.status(503).set('Content-Type', 'text/html').send(
+      `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;">
+        <h1>Frontend not built</h1>
+        <p>Run from the repo root:</p>
+        <pre>cd frontend && npm install && npm run build</pre>
+        <p>Then restart the server. Expected folder: <code>${frontendDist}</code></p>
+      </body></html>`
+    );
+  });
+  console.warn('Frontend dist not found at', frontendDist, '- build with: cd frontend && npm run build');
+}
 
 app.listen(PORT, () => {
   console.log(`Watchtower Server running on port ${PORT}`);
