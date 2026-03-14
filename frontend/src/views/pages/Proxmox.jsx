@@ -216,14 +216,14 @@ const Proxmox = () => {
     }
   };
 
-  // Build VM name with date: "UserInput MM-DD-YYYY"
+  // Build VM name with date: "UserInput-MM-DD-YYYY" (hyphen, no space — Proxmox may not like spaces)
   const getVmNameWithDate = (baseName) => {
     const trimmed = (baseName || '').trim() || 'VM';
     const now = new Date();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const dd = String(now.getDate()).padStart(2, '0');
     const yyyy = now.getFullYear();
-    return `${trimmed} ${mm}-${dd}-${yyyy}`;
+    return `${trimmed}-${mm}-${dd}-${yyyy}`;
   };
 
   // Create VM from template (clone on pve-node0; task runs on backend)
