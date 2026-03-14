@@ -13,6 +13,15 @@ const PROXMOX_REALM = process.env.PROXMOX_REALM || 'pam';
 // Base URL for Proxmox API
 const PROXMOX_BASE_URL = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/api2/json`;
 
+// Proxmox API expects application/x-www-form-urlencoded for POST/PUT, not JSON
+function toFormUrlEncoded(obj) {
+  if (obj == null || typeof obj !== 'object') return '';
+  return Object.entries(obj)
+    .filter(([, v]) => v !== undefined && v !== null)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .join('&');
+}
+
 // Helper function to make Proxmox API requests
 // Proxmox API returns: { data: [...] } format
 async function proxmoxRequest(endpoint, method = 'GET', data = null) {
@@ -26,9 +35,11 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
       headers['Authorization'] = `PVEAPIToken=${PROXMOX_USER}@${PROXMOX_REALM}!${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}`;
     }
     
-    // Only add Content-Type for POST/PUT requests with data
+    // Proxmox API requires application/x-www-form-urlencoded for POST/PUT
+    let body = null;
     if (data && (method === 'POST' || method === 'PUT')) {
-      headers['Content-Type'] = 'application/json';
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      body = toFormUrlEncoded(data);
     }
     
     const options = {
@@ -86,14 +97,18 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
           
           // Validate that it looks like JSON (starts with { or [)
           if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+            // Proxmox sometimes returns non-JSON for successful POST (e.g. clone); treat 2xx as success
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              console.log(`Proxmox API returned non-JSON with status ${res.statusCode} - treating as success`);
+              resolve(null);
+              return;
+            }
             console.error('Response does not appear to be JSON.');
             console.error('Status Code:', res.statusCode);
             console.error('Content-Type:', res.headers['content-type']);
-            console.error('Transfer-Encoding:', res.headers['transfer-encoding']);
             console.error('Response preview:', trimmed.substring(0, 200));
-            // Don't reject immediately - some endpoints might return non-JSON
-            // But log it for debugging
-            console.warn('Non-JSON response detected, but attempting to parse anyway');
+            reject(new Error(`Proxmox API error: ${res.statusCode} - response is not JSON`));
+            return;
           }
           
           // Parse JSON response
@@ -101,12 +116,15 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
           try {
             parsed = JSON.parse(trimmed);
           } catch (parseError) {
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              console.log(`Proxmox API response parse failed but status ${res.statusCode} - treating as success`);
+              resolve(null);
+              return;
+            }
             console.error('Failed to parse Proxmox API response as JSON.');
             console.error('Status Code:', res.statusCode);
             console.error('Content-Type:', res.headers['content-type']);
-            console.error('Response length:', trimmed.length);
             console.error('Response preview (first 500):', trimmed.substring(0, 500));
-            console.error('Response preview (last 200):', trimmed.substring(Math.max(0, trimmed.length - 200)));
             reject(new Error(`Failed to parse Proxmox API response: ${parseError.message}`));
             return;
           }
@@ -132,9 +150,9 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
       reject(new Error(`Proxmox API request failed: ${error.message}`));
     });
     
-    // Write request body for POST/PUT
-    if (data && (method === 'POST' || method === 'PUT')) {
-      req.write(JSON.stringify(data));
+    // Write request body for POST/PUT (form-urlencoded)
+    if (body) {
+      req.write(body);
     }
     
     req.end();
