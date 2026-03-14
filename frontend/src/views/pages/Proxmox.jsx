@@ -24,8 +24,6 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  FormControlLabel,
-  Radio,
   Snackbar,
 } from '@mui/material';
 import {
@@ -58,11 +56,8 @@ const Proxmox = () => {
   const [createConfig, setCreateConfig] = useState({
     template: '',
     name: '',
-    vmid: '',
-    full: false,
   });
   const [vmTemplates, setVmTemplates] = useState([]);
-  const [nextVmid, setNextVmid] = useState(null);
   const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Format bytes to human readable
@@ -110,19 +105,14 @@ const Proxmox = () => {
     }
   };
 
-  // Fetch QEMU VM templates (tmpl-Kali, tmpl-Win11, etc.) and next VMID for Create VM dialog
-  const fetchTemplatesAndNextVmid = async () => {
+  // Fetch QEMU VM templates (tmpl-Kali, tmpl-Win11, etc.) for Create VM dialog
+  const fetchTemplates = async () => {
     try {
-      const [tplRes, idRes] = await Promise.all([
-        api.get('/api/proxmox/templates'),
-        api.get('/api/proxmox/next-vmid'),
-      ]);
+      const tplRes = await api.get('/api/proxmox/templates');
       setVmTemplates(tplRes.data.templates || []);
-      setNextVmid(idRes.data.nextid ?? null);
     } catch (err) {
-      console.error('Error fetching templates or next VMID:', err);
+      console.error('Error fetching templates:', err);
       setVmTemplates([]);
-      setNextVmid(null);
     }
   };
 
@@ -137,10 +127,10 @@ const Proxmox = () => {
     fetchVMs();
   }, 10000);
 
-  // When Create VM dialog opens, fetch templates and next VMID
+  // When Create VM dialog opens, fetch templates
   useEffect(() => {
     if (createDialogOpen) {
-      fetchTemplatesAndNextVmid();
+      fetchTemplates();
     }
   }, [createDialogOpen]);
 
@@ -226,7 +216,17 @@ const Proxmox = () => {
     }
   };
 
-  // Create VM from template (clone + load-balanced node placement)
+  // Build VM name with date: "UserInput MM-DD-YYYY"
+  const getVmNameWithDate = (baseName) => {
+    const trimmed = (baseName || '').trim() || 'VM';
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const yyyy = now.getFullYear();
+    return `${trimmed} ${mm}-${dd}-${yyyy}`;
+  };
+
+  // Create VM from template (linked clone + load-balanced node placement)
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
@@ -237,14 +237,13 @@ const Proxmox = () => {
       setSnackbar({ open: true, message: 'Invalid template selection', severity: 'error' });
       return;
     }
+    const nameWithDate = getVmNameWithDate(createConfig.name);
     try {
       setCreateSubmitting(true);
       const response = await api.post('/api/proxmox/vms/create-from-template', {
         templateNode,
         templateVmid: parseInt(templateVmid, 10),
-        name: createConfig.name || undefined,
-        vmid: createConfig.vmid ? parseInt(createConfig.vmid, 10) : undefined,
-        full: createConfig.full,
+        name: nameWithDate,
       });
       const { name, node, vmid } = response.data;
       setSnackbar({
@@ -253,7 +252,7 @@ const Proxmox = () => {
         severity: 'success',
       });
       setCreateDialogOpen(false);
-      setCreateConfig({ template: '', name: '', vmid: '', full: false });
+      setCreateConfig({ template: '', name: '' });
       setTimeout(() => fetchVMs(), 2000);
     } catch (err) {
       setSnackbar({
@@ -530,27 +529,13 @@ const Proxmox = () => {
               label="Name"
               value={createConfig.name}
               onChange={(e) => setCreateConfig({ ...createConfig, name: e.target.value })}
-              placeholder="VM display name"
+              placeholder="e.g. Kali-Hedy"
             />
-
-            <TextField
-              fullWidth
-              label="VMID (optional)"
-              value={createConfig.vmid || (nextVmid ?? '')}
-              onChange={(e) => setCreateConfig({ ...createConfig, vmid: e.target.value })}
-              type="number"
-              placeholder={nextVmid != null ? `Auto: ${nextVmid}` : 'Auto'}
-            />
-
-            <FormControlLabel
-              control={
-                <Radio
-                  checked={createConfig.full}
-                  onChange={(e) => setCreateConfig({ ...createConfig, full: e.target.checked })}
-                />
-              }
-              label="Full clone (independent copy; slower, more disk)"
-            />
+            {createConfig.name?.trim() && (
+              <Typography variant="caption" color="text.secondary">
+                VM will be named: <strong>{getVmNameWithDate(createConfig.name)}</strong>
+              </Typography>
+            )}
             <Typography variant="caption" color="text.secondary">
               The VM will be placed on the node with the most free resources (load-balanced).
             </Typography>
