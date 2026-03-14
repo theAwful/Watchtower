@@ -18,7 +18,10 @@ function toFormUrlEncoded(obj) {
   if (obj == null || typeof obj !== 'object') return '';
   return Object.entries(obj)
     .filter(([, v]) => v !== undefined && v !== null)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+    .map(([k, v]) => {
+      const val = typeof v === 'boolean' ? (v ? '1' : '0') : String(v);
+      return `${encodeURIComponent(k)}=${encodeURIComponent(val)}`;
+    })
     .join('&');
 }
 
@@ -38,8 +41,9 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
     // Proxmox API requires application/x-www-form-urlencoded for POST/PUT
     let body = null;
     if (data && (method === 'POST' || method === 'PUT')) {
-      headers['Content-Type'] = 'application/x-www-form-urlencoded';
       body = toFormUrlEncoded(data);
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      headers['Content-Length'] = Buffer.byteLength(body, 'utf8');
     }
     
     const options = {
@@ -106,8 +110,9 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
             console.error('Response does not appear to be JSON.');
             console.error('Status Code:', res.statusCode);
             console.error('Content-Type:', res.headers['content-type']);
-            console.error('Response preview:', trimmed.substring(0, 200));
-            reject(new Error(`Proxmox API error: ${res.statusCode} - response is not JSON`));
+            console.error('Response preview:', trimmed.substring(0, 500));
+            const bodyPreview = trimmed.length > 300 ? trimmed.substring(0, 300) + '...' : trimmed;
+            reject(new Error(`Proxmox API error: ${res.statusCode} - ${bodyPreview}`));
             return;
           }
           
