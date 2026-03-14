@@ -617,6 +617,19 @@ export async function stopVM(node, vmid, type = 'qemu') {
   }
 }
 
+// Reboot a VM
+// API: POST /api2/json/nodes/{node}/qemu/{vmid}/status/reboot or POST /api2/json/nodes/{node}/lxc/{vmid}/status/reboot
+export async function rebootVM(node, vmid, type = 'qemu') {
+  try {
+    const endpoint = `/nodes/${node}/${type}/${vmid}/status/reboot`;
+    const result = await proxmoxRequest(endpoint, 'POST');
+    return result;
+  } catch (error) {
+    console.error('Error rebooting VM:', error);
+    throw error;
+  }
+}
+
 // Get available nodes
 // API: GET /api2/json/nodes
 export async function getNodes() {

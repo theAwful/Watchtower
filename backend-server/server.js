@@ -474,6 +474,21 @@ app.post('/api/proxmox/vms/:node/:vmid/stop', async (req, res) => {
   }
 });
 
+app.post('/api/proxmox/vms/:node/:vmid/restart', async (req, res) => {
+  try {
+    const { node, vmid } = req.params;
+    const { type } = req.query;
+    
+    const result = await proxmox.rebootVM(node, vmid, type || 'qemu');
+    res.json({ success: true, result });
+  } catch (error) {
+    console.error('Error restarting VM:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to restart VM',
+    });
+  }
+});
+
 // Get VNC console URL
 app.get('/api/proxmox/vms/:node/:vmid/vnc', async (req, res) => {
   try {

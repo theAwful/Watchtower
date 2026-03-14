@@ -31,6 +31,7 @@ import {
 import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
+  RestartAlt as RestartIcon,
   Delete as DeleteIcon,
   Computer as VNCIcon,
   Refresh as RefreshIcon,
@@ -49,6 +50,7 @@ const Proxmox = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState(STATUS_FILTER_ALL); // 'all' | 'running'
+  const [searchQuery, setSearchQuery] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [vmToDelete, setVmToDelete] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
@@ -147,9 +149,20 @@ const Proxmox = () => {
     ? vms.filter((vm) => vm.status === 'running')
     : vms;
 
+  const searchLower = searchQuery.trim().toLowerCase();
+  const searchFilteredVms = searchLower
+    ? filteredVms.filter(
+        (vm) =>
+          (vm.name && vm.name.toLowerCase().includes(searchLower)) ||
+          String(vm.vmid).includes(searchQuery.trim()) ||
+          (vm.node && vm.node.toLowerCase().includes(searchLower)) ||
+          (vm.ip && vm.ip.includes(searchQuery.trim()))
+      )
+    : filteredVms;
+
   const vmsByNode = () => {
     const byNode = {};
-    filteredVms.forEach((vm) => {
+    searchFilteredVms.forEach((vm) => {
       const n = vm.node || 'unknown';
       if (!byNode[n]) byNode[n] = [];
       byNode[n].push(vm);
@@ -175,6 +188,16 @@ const Proxmox = () => {
       setTimeout(() => fetchVMs(), 1000);
     } catch (err) {
       setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to stop VM', severity: 'error' });
+    }
+  };
+
+  const handleRestart = async (vm) => {
+    try {
+      await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/restart?type=${vm.type}`);
+      setSnackbar({ open: true, message: `Restarting VM ${vm.name}...`, severity: 'success' });
+      setTimeout(() => fetchVMs(), 2000);
+    } catch (err) {
+      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to restart VM', severity: 'error' });
     }
   };
 
@@ -294,7 +317,6 @@ const Proxmox = () => {
                       }}
                       sx={{
                         cursor: 'pointer',
-                        textDecoration: 'underline',
                         '&:hover': { opacity: 0.8 },
                       }}
                     >
@@ -316,6 +338,16 @@ const Proxmox = () => {
                     color="success"
                   >
                     <PlayIcon />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title="Restart">
+                  <IconButton
+                    size="small"
+                    onClick={() => handleRestart(vm)}
+                    disabled={vm.status !== 'running'}
+                    color="info"
+                  >
+                    <RestartIcon />
                   </IconButton>
                 </Tooltip>
                 <Tooltip title="Stop">
@@ -394,6 +426,19 @@ const Proxmox = () => {
             </Alert>
           )}
 
+          {/* Search */}
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="Search by name, VMID, node, or IP..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            sx={{ mb: 2, maxWidth: 400 }}
+            InputProps={{
+              sx: { backgroundColor: 'background.paper' },
+            }}
+          />
+
           {/* Status filter: All vs Running */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
             <Typography variant="body2" color="text.secondary">
@@ -443,10 +488,14 @@ const Proxmox = () => {
           {/* VMs grouped by node */}
           {nodeNames.map((nodeName) => renderVMTable(byNode[nodeName], nodeName))}
 
-          {filteredVms.length === 0 && !loading && (
+          {searchFilteredVms.length === 0 && !loading && (
             <Paper sx={{ p: 3, textAlign: 'center' }}>
               <Typography variant="body1" color="text.secondary">
-                {statusFilter === STATUS_FILTER_RUNNING ? 'No running VMs' : 'No VMs found'}
+                {searchQuery.trim()
+                  ? 'No VMs match your search'
+                  : statusFilter === STATUS_FILTER_RUNNING
+                    ? 'No running VMs'
+                    : 'No VMs found'}
               </Typography>
             </Paper>
           )}
