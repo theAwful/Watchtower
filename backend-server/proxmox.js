@@ -141,22 +141,34 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
   });
 }
 
-// Normalize VM list: Proxmox may return array or object keyed by vmid
-function toVMList(vms) {
-  if (!vms) return [];
-  if (Array.isArray(vms)) return vms;
-  if (typeof vms === 'object' && vms !== null) return Object.values(vms);
-  return [vms];
+// Extract VMIDs from list response: array of objects, array of numbers, or object keyed by vmid
+function extractVMIds(list) {
+  if (!list) return [];
+  if (Array.isArray(list)) {
+    return list
+      .map((item) => (typeof item === 'object' && item !== null ? (item.vmid ?? item.id ?? item) : item))
+      .filter((id) => id != null && id !== '');
+  }
+  if (typeof list === 'object' && list !== null) {
+    const vals = Object.values(list);
+    const first = vals[0];
+    if (vals.length > 0 && typeof first === 'object' && first !== null && (first.vmid != null || first.id != null)) {
+      return vals.map((v) => v.vmid ?? v.id).filter((id) => id != null);
+    }
+    return Object.keys(list)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !Number.isNaN(n) && n > 0);
+  }
+  return [];
 }
 
-// Template flag: Proxmox can return 1, "1", or template name string
-function isTemplate(vm) {
-  const t = vm?.template;
+// Template from config: 1, "1", or truthy
+function isTemplateFromConfig(config) {
+  const t = config?.template;
   return t === 1 || t === '1' || (typeof t === 'string' && t.length > 0);
 }
 
-// Get all VMs and containers
-// API: GET /api2/json/nodes/{node}/qemu?full=1 and GET /api2/json/nodes/{node}/lxc?full=1
+// Get all VMs: use list to get VMIDs, then GET /nodes/{node}/qemu/{vmid} (config) + status/current per VM
 export async function getVMs() {
   try {
     const nodesRaw = await proxmoxRequest('/nodes');
@@ -170,98 +182,137 @@ export async function getVMs() {
       if (!nodeName) continue;
 
       try {
-        // full=1 includes template flag and status in list response
-        const vms = await proxmoxRequest(`/nodes/${nodeName}/qemu?full=1`);
-        const vmList = toVMList(vms);
-
-        for (const vm of vmList) {
-          const vmid = vm?.vmid ?? vm?.id;
-          const vmName = vm?.name ?? `VM ${vmid}`;
-          if (vmid == null) continue;
-
-          const isTpl = isTemplate(vm);
-          let status = vm?.status ?? 'unknown';
-          let cpu = vm?.cpu ?? 0;
-          let mem = vm?.mem ?? 0;
-          let maxmem = vm?.maxmem ?? 0;
-          let uptime = vm?.uptime ?? 0;
-          let disk = vm?.disk ?? 0;
-          let maxdisk = vm?.maxdisk ?? 0;
-
-          try {
-            const statusRes = await proxmoxRequest(`/nodes/${nodeName}/qemu/${vmid}/status/current`);
-            if (statusRes) {
-              status = statusRes.status ?? status;
-              cpu = statusRes.cpu ?? cpu;
-              mem = statusRes.mem ?? mem;
-              maxmem = statusRes.maxmem ?? maxmem;
-              uptime = statusRes.uptime ?? uptime;
-              disk = statusRes.disk ?? disk;
-              maxdisk = statusRes.maxdisk ?? maxdisk;
-            }
-          } catch (_) {
-            // Template or stopped VM may not support status/current; keep list values
-          }
-
-          allVMs.push({
-            vmid,
-            name: vmName,
-            node: nodeName,
-            type: 'qemu',
-            template: isTpl,
-            status,
-            cpu,
-            mem,
-            maxmem,
-            uptime,
-            disk,
-            maxdisk,
-          });
+        // 1) Get list of QEMU VMIDs from node list endpoint
+        let qemuList;
+        try {
+          qemuList = await proxmoxRequest(`/nodes/${nodeName}/qemu`);
+        } catch (e) {
+          qemuList = null;
         }
-        
-        // LXC containers (full=1 for consistent response)
-        const containers = await proxmoxRequest(`/nodes/${nodeName}/lxc?full=1`);
-        const containerList = toVMList(containers);
+        let qemuIds = extractVMIds(qemuList);
 
-        for (const container of containerList) {
-          const vmid = container?.vmid ?? container?.id;
-          const containerName = container?.name ?? `CT ${vmid}`;
-          if (vmid == null) continue;
-
-          let status = container?.status ?? 'unknown';
-          let cpu = container?.cpu ?? 0;
-          let mem = container?.mem ?? 0;
-          let maxmem = container?.maxmem ?? 0;
-          let uptime = container?.uptime ?? 0;
-          let disk = container?.disk ?? 0;
-          let maxdisk = container?.maxdisk ?? 0;
+        // Fallback: if list empty or failed, try cluster/resources for this node's VMs
+        if (qemuIds.length === 0) {
           try {
-            const statusRes = await proxmoxRequest(`/nodes/${nodeName}/lxc/${vmid}/status/current`);
-            if (statusRes) {
-              status = statusRes.status ?? status;
-              cpu = statusRes.cpu ?? cpu;
-              mem = statusRes.mem ?? mem;
-              maxmem = statusRes.maxmem ?? maxmem;
-              uptime = statusRes.uptime ?? uptime;
-              disk = statusRes.disk ?? disk;
-              maxdisk = statusRes.maxdisk ?? maxdisk;
-            }
+            const resources = await proxmoxRequest('/cluster/resources');
+            const list = Array.isArray(resources) ? resources : (resources ? [resources] : []);
+            qemuIds = list
+              .filter((r) => (r.type === 'qemu' && r.node === nodeName) || (r.node === nodeName && String(r.type).toLowerCase() === 'qemu'))
+              .map((r) => r.vmid ?? r.id)
+              .filter((id) => id != null);
           } catch (_) {}
+        }
 
-          allVMs.push({
-            vmid,
-            name: containerName,
-            node: nodeName,
-            type: 'lxc',
-            template: false,
-            status,
-            cpu,
-            mem,
-            maxmem,
-            uptime,
-            disk,
-            maxdisk,
-          });
+        for (const vmid of qemuIds) {
+          try {
+            const config = await proxmoxRequest(`/nodes/${nodeName}/qemu/${vmid}/config`);
+            const name = (config && (config.name != null)) ? config.name : `VM ${vmid}`;
+            const isTpl = config ? isTemplateFromConfig(config) : false;
+
+            let status = 'stopped';
+            let cpu = 0;
+            let mem = 0;
+            let maxmem = config?.memory || 0;
+            let uptime = 0;
+            let disk = 0;
+            let maxdisk = 0;
+
+            try {
+              const statusRes = await proxmoxRequest(`/nodes/${nodeName}/qemu/${vmid}/status/current`);
+              if (statusRes) {
+                status = statusRes.status ?? 'stopped';
+                cpu = statusRes.cpu ?? 0;
+                mem = statusRes.mem ?? 0;
+                maxmem = statusRes.maxmem ?? maxmem;
+                uptime = statusRes.uptime ?? 0;
+                disk = statusRes.disk ?? 0;
+                maxdisk = statusRes.maxdisk ?? 0;
+              }
+            } catch (_) {
+              // Template or stopped VM may not have status/current
+            }
+
+            allVMs.push({
+              vmid,
+              name,
+              node: nodeName,
+              type: 'qemu',
+              template: isTpl,
+              status,
+              cpu,
+              mem,
+              maxmem,
+              uptime,
+              disk,
+              maxdisk,
+            });
+          } catch (err) {
+            console.warn(`Skip VM ${vmid} on ${nodeName}:`, err.message);
+          }
+        }
+
+        // 2) LXC: same pattern – list then config + status per ID
+        let lxcList;
+        try {
+          lxcList = await proxmoxRequest(`/nodes/${nodeName}/lxc`);
+        } catch (e) {
+          lxcList = null;
+        }
+        let lxcIds = extractVMIds(lxcList);
+        if (lxcIds.length === 0) {
+          try {
+            const resources = await proxmoxRequest('/cluster/resources');
+            const list = Array.isArray(resources) ? resources : (resources ? [resources] : []);
+            lxcIds = list
+              .filter((r) => (r.type === 'lxc' && r.node === nodeName) || (r.node === nodeName && String(r.type).toLowerCase() === 'lxc'))
+              .map((r) => r.vmid ?? r.id)
+              .filter((id) => id != null);
+          } catch (_) {}
+        }
+
+        for (const vmid of lxcIds) {
+          try {
+            const config = await proxmoxRequest(`/nodes/${nodeName}/lxc/${vmid}/config`);
+            const name = (config && (config.hostname != null)) ? config.hostname : (config?.name ?? `CT ${vmid}`);
+
+            let status = 'stopped';
+            let cpu = 0;
+            let mem = 0;
+            let maxmem = config?.memory || 0;
+            let uptime = 0;
+            let disk = 0;
+            let maxdisk = 0;
+
+            try {
+              const statusRes = await proxmoxRequest(`/nodes/${nodeName}/lxc/${vmid}/status/current`);
+              if (statusRes) {
+                status = statusRes.status ?? 'stopped';
+                cpu = statusRes.cpu ?? 0;
+                mem = statusRes.mem ?? 0;
+                maxmem = statusRes.maxmem ?? maxmem;
+                uptime = statusRes.uptime ?? 0;
+                disk = statusRes.disk ?? 0;
+                maxdisk = statusRes.maxdisk ?? 0;
+              }
+            } catch (_) {}
+
+            allVMs.push({
+              vmid,
+              name,
+              node: nodeName,
+              type: 'lxc',
+              template: false,
+              status,
+              cpu,
+              mem,
+              maxmem,
+              uptime,
+              disk,
+              maxdisk,
+            });
+          } catch (err) {
+            console.warn(`Skip CT ${vmid} on ${nodeName}:`, err.message);
+          }
         }
       } catch (err) {
         console.error(`Error fetching VMs from node ${nodeName}:`, err.message);
