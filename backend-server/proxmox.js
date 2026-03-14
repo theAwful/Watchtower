@@ -141,6 +141,26 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
   });
 }
 
+// Get guest IP from QEMU guest agent (requires agent installed and VM running)
+// API: GET /api2/json/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces
+function getGuestIP(node, vmid) {
+  return proxmoxRequest(`/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`)
+    .then((data) => {
+      const result = data?.result ?? data;
+      const ifaces = Array.isArray(result) ? result : (result && typeof result === 'object' ? [result] : []);
+      for (const iface of ifaces) {
+        const addrs = iface['ip-addresses'] || [];
+        for (const addr of addrs) {
+          const ip = addr['ip-address'];
+          const type = addr['ip-address-type'];
+          if (ip && type === 'ipv4' && ip !== '127.0.0.1') return ip;
+        }
+      }
+      return null;
+    })
+    .catch(() => null);
+}
+
 // Get all VMs and containers from cluster-wide resources (single API call)
 // API: GET /api2/json/cluster/resources - returns all VMs with node, vmid, name, status, template, cpu, mem, etc.
 // Docs: https://pve.proxmox.com/pve-docs/api-viewer/#/cluster/resources
@@ -175,9 +195,20 @@ export async function getVMs() {
           uptime: typeof r.uptime === 'number' ? r.uptime : 0,
           disk: typeof r.disk === 'number' ? r.disk : 0,
           maxdisk: typeof r.maxdisk === 'number' ? r.maxdisk : 0,
+          ip: null,
         };
       })
       .filter(Boolean);
+
+    // Enrich with guest IP from QEMU guest agent (when VM is running and agent is installed)
+    const ipResults = await Promise.allSettled(
+      allVMs.map((vm) => (vm.type === 'qemu' ? getGuestIP(vm.node, vm.vmid) : Promise.resolve(null)))
+    );
+    ipResults.forEach((result, i) => {
+      if (i < allVMs.length && result.status === 'fulfilled' && result.value) {
+        allVMs[i].ip = result.value;
+      }
+    });
     
     // Get pool information for all VMs
     try {

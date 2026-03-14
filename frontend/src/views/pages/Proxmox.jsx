@@ -38,6 +38,7 @@ import {
 } from '@mui/icons-material';
 import api from '../../models/ApiModel';
 import { useInterval } from '../../controllers/useInterval';
+import { copyToClipboard } from '../../utils/clipboardUtils';
 
 const STATUS_FILTER_ALL = 'all';
 const STATUS_FILTER_RUNNING = 'running';
@@ -257,6 +258,7 @@ const Proxmox = () => {
             <TableCell>CPU</TableCell>
             <TableCell>Memory</TableCell>
             <TableCell>Uptime</TableCell>
+            <TableCell>IP</TableCell>
             <TableCell align="right">Actions</TableCell>
           </TableRow>
         </TableHead>
@@ -277,6 +279,34 @@ const Proxmox = () => {
                 {formatBytes(vm.mem || 0)} / {formatBytes(vm.maxmem || 0)}
               </TableCell>
               <TableCell>{formatUptime(vm.uptime)}</TableCell>
+              <TableCell>
+                {vm.ip ? (
+                  <Tooltip title="Click to copy">
+                    <Typography
+                      component="span"
+                      onClick={async () => {
+                        const ok = await copyToClipboard(vm.ip);
+                        setSnackbar({
+                          open: true,
+                          message: ok ? `${vm.ip} copied to clipboard` : 'Failed to copy',
+                          severity: ok ? 'success' : 'warning',
+                        });
+                      }}
+                      sx={{
+                        cursor: 'pointer',
+                        textDecoration: 'underline',
+                        '&:hover': { opacity: 0.8 },
+                      }}
+                    >
+                      {vm.ip}
+                    </Typography>
+                  </Tooltip>
+                ) : (
+                  <Typography component="span" color="text.secondary">
+                    —
+                  </Typography>
+                )}
+              </TableCell>
               <TableCell align="right">
                 <Tooltip title="Start">
                   <IconButton
