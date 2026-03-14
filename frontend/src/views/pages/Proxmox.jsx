@@ -39,24 +39,26 @@ import {
 import api from '../../models/ApiModel';
 import { useInterval } from '../../controllers/useInterval';
 
+const STATUS_FILTER_ALL = 'all';
+const STATUS_FILTER_RUNNING = 'running';
+
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
-  const [pools, setPools] = useState([]);
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [statusFilter, setStatusFilter] = useState(STATUS_FILTER_ALL); // 'all' | 'running'
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [vmToDelete, setVmToDelete] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createConfig, setCreateConfig] = useState({
-    template: '', // selected template key "node/vmid"
+    template: '',
     name: '',
     vmid: '',
-    pool: '',
     full: false,
   });
-  const [vmTemplates, setVmTemplates] = useState([]); // QEMU templates (tmpl-Kali, tmpl-Win11)
+  const [vmTemplates, setVmTemplates] = useState([]);
   const [nextVmid, setNextVmid] = useState(null);
   const [createSubmitting, setCreateSubmitting] = useState(false);
 
@@ -95,16 +97,6 @@ const Proxmox = () => {
     }
   };
 
-  // Fetch pools
-  const fetchPools = async () => {
-    try {
-      const response = await api.get('/api/proxmox/pools');
-      setPools(response.data.pools || []);
-    } catch (err) {
-      console.error('Error fetching pools:', err);
-    }
-  };
-
   // Fetch nodes
   const fetchNodes = async () => {
     try {
@@ -134,7 +126,6 @@ const Proxmox = () => {
   // Initial load
   useEffect(() => {
     fetchVMs(true);
-    fetchPools();
     fetchNodes();
   }, []);
 
@@ -150,24 +141,19 @@ const Proxmox = () => {
     }
   }, [createDialogOpen]);
 
-  // Group VMs by pool
-  const groupedVMs = () => {
-    const grouped = {};
-    const unassigned = [];
+  // Filter VMs by status then group by node
+  const filteredVms = statusFilter === STATUS_FILTER_RUNNING
+    ? vms.filter((vm) => vm.status === 'running')
+    : vms;
 
-    vms.forEach((vm) => {
-      const poolId = vm.pool || 'unassigned';
-      if (poolId === 'unassigned' || !poolId) {
-        unassigned.push(vm);
-      } else {
-        if (!grouped[poolId]) {
-          grouped[poolId] = [];
-        }
-        grouped[poolId].push(vm);
-      }
+  const vmsByNode = () => {
+    const byNode = {};
+    filteredVms.forEach((vm) => {
+      const n = vm.node || 'unknown';
+      if (!byNode[n]) byNode[n] = [];
+      byNode[n].push(vm);
     });
-
-    return { grouped, unassigned };
+    return byNode;
   };
 
   // VM Actions
@@ -216,22 +202,6 @@ const Proxmox = () => {
     }
   };
 
-  const handlePoolChange = async (vm, newPoolId) => {
-    try {
-      await api.put(`/api/proxmox/vms/${vm.node}/${vm.vmid}/pool`, {
-        type: vm.type,
-        poolid: newPoolId === 'unassigned' ? null : newPoolId,
-      });
-      setSnackbar({ open: true, message: `VM moved to ${newPoolId === 'unassigned' ? 'Unassigned' : newPoolId}`, severity: 'success' });
-      setTimeout(() => {
-        fetchVMs();
-        fetchPools();
-      }, 1000);
-    } catch (err) {
-      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to change pool', severity: 'error' });
-    }
-  };
-
   // Create VM from template (clone + load-balanced node placement)
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
@@ -250,7 +220,6 @@ const Proxmox = () => {
         templateVmid: parseInt(templateVmid, 10),
         name: createConfig.name || undefined,
         vmid: createConfig.vmid ? parseInt(createConfig.vmid, 10) : undefined,
-        pool: createConfig.pool && createConfig.pool !== 'unassigned' ? createConfig.pool : undefined,
         full: createConfig.full,
       });
       const { name, node, vmid } = response.data;
@@ -260,7 +229,7 @@ const Proxmox = () => {
         severity: 'success',
       });
       setCreateDialogOpen(false);
-      setCreateConfig({ template: '', name: '', vmid: '', pool: '', full: false });
+      setCreateConfig({ template: '', name: '', vmid: '', full: false });
       setTimeout(() => fetchVMs(), 2000);
     } catch (err) {
       setSnackbar({
@@ -273,23 +242,21 @@ const Proxmox = () => {
     }
   };
 
-  // Render VM table
-  const renderVMTable = (vmList, poolName) => (
+  // Render VM table for a single node
+  const renderVMTable = (vmList, nodeName) => (
     <TableContainer component={Paper} sx={{ mb: 3 }}>
       <Typography variant="h6" sx={{ p: 2, borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}>
-        {poolName} ({vmList.length} VMs)
+        {nodeName} ({vmList.length} VMs)
       </Typography>
       <Table>
         <TableHead>
           <TableRow>
             <TableCell>VMID</TableCell>
             <TableCell>Name</TableCell>
-            <TableCell>Node</TableCell>
             <TableCell>Status</TableCell>
             <TableCell>CPU</TableCell>
             <TableCell>Memory</TableCell>
             <TableCell>Uptime</TableCell>
-            <TableCell>Pool</TableCell>
             <TableCell align="right">Actions</TableCell>
           </TableRow>
         </TableHead>
@@ -298,7 +265,6 @@ const Proxmox = () => {
             <TableRow key={`${vm.node}-${vm.vmid}`} hover>
               <TableCell>{vm.vmid}</TableCell>
               <TableCell>{vm.name || `VM-${vm.vmid}`}</TableCell>
-              <TableCell>{vm.node}</TableCell>
               <TableCell>
                 <Chip
                   label={vm.status || 'unknown'}
@@ -311,21 +277,6 @@ const Proxmox = () => {
                 {formatBytes(vm.mem || 0)} / {formatBytes(vm.maxmem || 0)}
               </TableCell>
               <TableCell>{formatUptime(vm.uptime)}</TableCell>
-              <TableCell>
-                <FormControl size="small" sx={{ minWidth: 150 }}>
-                  <Select
-                    value={vm.pool || 'unassigned'}
-                    onChange={(e) => handlePoolChange(vm, e.target.value)}
-                  >
-                    <MenuItem value="unassigned">Unassigned</MenuItem>
-                    {pools.map((pool) => (
-                      <MenuItem key={pool.poolid} value={pool.poolid}>
-                        {pool.poolid}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </TableCell>
               <TableCell align="right">
                 <Tooltip title="Start">
                   <IconButton
@@ -377,7 +328,8 @@ const Proxmox = () => {
     </TableContainer>
   );
 
-  const { grouped, unassigned } = groupedVMs();
+  const byNode = vmsByNode();
+  const nodeNames = Object.keys(byNode).sort();
 
   return (
     <Box sx={{ width: '100%', maxWidth: '100%', p: { xs: 1, sm: 2, md: 3 }, boxSizing: 'border-box' }}>
@@ -392,10 +344,7 @@ const Proxmox = () => {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => {
-              setCreateDialogOpen(true);
-              fetchPools();
-            }}
+            onClick={() => setCreateDialogOpen(true)}
             sx={{ ml: 2 }}
           >
             Create VM
@@ -415,19 +364,59 @@ const Proxmox = () => {
             </Alert>
           )}
 
-          {/* Render VMs grouped by pool */}
-          {Object.keys(grouped).map((poolId) => {
-            const pool = pools.find((p) => p.poolid === poolId);
-            return renderVMTable(grouped[poolId], pool ? pool.poolid : poolId);
-          })}
+          {/* Status filter: All vs Running */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              Show:
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              <Button
+                size="small"
+                variant={statusFilter === STATUS_FILTER_ALL ? 'contained' : 'outlined'}
+                onClick={() => setStatusFilter(STATUS_FILTER_ALL)}
+              >
+                All
+              </Button>
+              <Button
+                size="small"
+                variant={statusFilter === STATUS_FILTER_RUNNING ? 'contained' : 'outlined'}
+                onClick={() => setStatusFilter(STATUS_FILTER_RUNNING)}
+              >
+                Running only
+              </Button>
+            </Box>
+          </Box>
 
-          {/* Unassigned VMs */}
-          {unassigned.length > 0 && renderVMTable(unassigned, 'Unassigned VMs')}
+          {/* Nodes summary */}
+          {nodes.length > 0 && (
+            <Paper sx={{ p: 2, mb: 3 }}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
+                Nodes ({nodes.length})
+              </Typography>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                {nodes.map((n) => {
+                  const count = vms.filter((v) => v.node === n.node).length;
+                  return (
+                    <Chip
+                      key={n.node}
+                      label={`${n.node} ${n.status === 'online' ? '●' : '○'} (${count} VMs)`}
+                      color={n.status === 'online' ? 'primary' : 'default'}
+                      variant="outlined"
+                      size="small"
+                    />
+                  );
+                })}
+              </Box>
+            </Paper>
+          )}
 
-          {vms.length === 0 && !loading && (
+          {/* VMs grouped by node */}
+          {nodeNames.map((nodeName) => renderVMTable(byNode[nodeName], nodeName))}
+
+          {filteredVms.length === 0 && !loading && (
             <Paper sx={{ p: 3, textAlign: 'center' }}>
               <Typography variant="body1" color="text.secondary">
-                No VMs found
+                {statusFilter === STATUS_FILTER_RUNNING ? 'No running VMs' : 'No VMs found'}
               </Typography>
             </Paper>
           )}
@@ -473,22 +462,6 @@ const Proxmox = () => {
               type="number"
               placeholder={nextVmid != null ? `Auto: ${nextVmid}` : 'Auto'}
             />
-
-            <FormControl fullWidth>
-              <InputLabel>Pool (optional)</InputLabel>
-              <Select
-                value={createConfig.pool || 'unassigned'}
-                onChange={(e) => setCreateConfig({ ...createConfig, pool: e.target.value })}
-                label="Pool (optional)"
-              >
-                <MenuItem value="unassigned">Unassigned</MenuItem>
-                {pools.map((pool) => (
-                  <MenuItem key={pool.poolid} value={pool.poolid}>
-                    {pool.poolid}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
 
             <FormControlLabel
               control={

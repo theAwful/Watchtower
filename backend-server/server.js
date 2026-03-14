@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import net from 'net';
@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 import * as proxmox from './proxmox.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Load .env from the backend-server folder so it works no matter where you start the process
+dotenv.config({ path: path.join(__dirname, '.env') });
 const app = express();
 const PORT = parseInt(process.env.PORT || '8080', 10);
 

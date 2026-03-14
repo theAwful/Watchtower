@@ -141,172 +141,130 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
   });
 }
 
+// Normalize VM list: Proxmox may return array or object keyed by vmid
+function toVMList(vms) {
+  if (!vms) return [];
+  if (Array.isArray(vms)) return vms;
+  if (typeof vms === 'object' && vms !== null) return Object.values(vms);
+  return [vms];
+}
+
+// Template flag: Proxmox can return 1, "1", or template name string
+function isTemplate(vm) {
+  const t = vm?.template;
+  return t === 1 || t === '1' || (typeof t === 'string' && t.length > 0);
+}
+
 // Get all VMs and containers
-// API: GET /api2/json/nodes/{node}/qemu and GET /api2/json/nodes/{node}/lxc
+// API: GET /api2/json/nodes/{node}/qemu?full=1 and GET /api2/json/nodes/{node}/lxc?full=1
 export async function getVMs() {
   try {
-    console.log('Fetching Proxmox nodes...');
-    const nodes = await proxmoxRequest('/nodes');
-    console.log('Raw nodes response:', JSON.stringify(nodes, null, 2));
-    console.log(`Found ${nodes?.length || 0} nodes`);
-    
-    if (!nodes) {
-      console.warn('Nodes response is null or undefined');
-      return [];
-    }
-    
-    if (!Array.isArray(nodes)) {
-      console.warn('Nodes response is not an array:', typeof nodes, nodes);
-      return [];
-    }
-    
-    if (nodes.length === 0) {
-      console.warn('No nodes found in response');
-      return [];
-    }
-    
-    console.log(`Node names:`, nodes.map(n => {
-      const name = n?.node || n;
-      console.log(`  - Node object:`, JSON.stringify(n, null, 2));
-      return name;
-    }).join(', '));
-    
+    const nodesRaw = await proxmoxRequest('/nodes');
+    const nodes = Array.isArray(nodesRaw) ? nodesRaw : (nodesRaw ? [nodesRaw] : []);
+    if (nodes.length === 0) return [];
+
     const allVMs = [];
-    
-    // Get VMs from each node
+
     for (const node of nodes) {
-      // Handle different possible node response formats
-      const nodeName = node?.node || node?.name || (typeof node === 'string' ? node : null);
-      
-      if (!nodeName) {
-        console.warn('Skipping node with no identifiable name. Node object:', JSON.stringify(node, null, 2));
-        continue;
-      }
-      
-      console.log(`\n=== Processing node: ${nodeName} ===`);
-      
+      const nodeName = node?.node ?? node?.name ?? (typeof node === 'string' ? node : null);
+      if (!nodeName) continue;
+
       try {
-        // Get QEMU VMs
-        console.log(`Fetching QEMU VMs from /nodes/${nodeName}/qemu`);
-        const vms = await proxmoxRequest(`/nodes/${nodeName}/qemu`);
-        console.log(`Raw QEMU VMs response:`, JSON.stringify(vms, null, 2));
-        console.log(`VM response type:`, typeof vms, Array.isArray(vms) ? 'array' : 'not array');
-        console.log(`VM count:`, vms?.length || 0);
-        
-        if (vms) {
-          // Handle both array and object responses
-          const vmList = Array.isArray(vms) ? vms : (vms.data || [vms]);
-          
-          if (vmList.length > 0) {
-            console.log(`Processing ${vmList.length} QEMU VMs...`);
-            for (const vm of vmList) {
-              const vmid = vm?.vmid || vm?.id;
-              const vmName = vm?.name || `VM ${vmid}`;
-              
-              if (!vmid) {
-                console.warn('Skipping VM with no vmid:', JSON.stringify(vm, null, 2));
-                continue;
-              }
-              
-              console.log(`  Processing VM ${vmid} (${vmName})`);
-              
-              try {
-                // Get VM status: GET /api2/json/nodes/{node}/qemu/{vmid}/status/current
-                const status = await proxmoxRequest(`/nodes/${nodeName}/qemu/${vmid}/status/current`);
-                console.log(`    Status for VM ${vmid}:`, status?.status || 'unknown');
-                
-                allVMs.push({
-                  vmid: vmid,
-                  name: vmName,
-                  node: nodeName,
-                  type: 'qemu',
-                  template: vm?.template === 1,
-                  status: status?.status || 'unknown',
-                  cpu: status?.cpu || 0,
-                  mem: status?.mem || 0,
-                  maxmem: status?.maxmem || 0,
-                  uptime: status?.uptime || 0,
-                  disk: status?.disk || 0,
-                  maxdisk: status?.maxdisk || 0,
-                });
-              } catch (err) {
-                console.warn(`    Error fetching status for VM ${vmid}:`, err.message);
-                // If status fetch fails, still include the VM with basic info
-                allVMs.push({
-                  vmid: vmid,
-                  name: vmName,
-                  node: nodeName,
-                  type: 'qemu',
-                  template: vm?.template === 1,
-                  status: 'unknown',
-                });
-              }
+        // full=1 includes template flag and status in list response
+        const vms = await proxmoxRequest(`/nodes/${nodeName}/qemu?full=1`);
+        const vmList = toVMList(vms);
+
+        for (const vm of vmList) {
+          const vmid = vm?.vmid ?? vm?.id;
+          const vmName = vm?.name ?? `VM ${vmid}`;
+          if (vmid == null) continue;
+
+          const isTpl = isTemplate(vm);
+          let status = vm?.status ?? 'unknown';
+          let cpu = vm?.cpu ?? 0;
+          let mem = vm?.mem ?? 0;
+          let maxmem = vm?.maxmem ?? 0;
+          let uptime = vm?.uptime ?? 0;
+          let disk = vm?.disk ?? 0;
+          let maxdisk = vm?.maxdisk ?? 0;
+
+          try {
+            const statusRes = await proxmoxRequest(`/nodes/${nodeName}/qemu/${vmid}/status/current`);
+            if (statusRes) {
+              status = statusRes.status ?? status;
+              cpu = statusRes.cpu ?? cpu;
+              mem = statusRes.mem ?? mem;
+              maxmem = statusRes.maxmem ?? maxmem;
+              uptime = statusRes.uptime ?? uptime;
+              disk = statusRes.disk ?? disk;
+              maxdisk = statusRes.maxdisk ?? maxdisk;
             }
-          } else {
-            console.log(`No QEMU VMs found on node ${nodeName}`);
+          } catch (_) {
+            // Template or stopped VM may not support status/current; keep list values
           }
+
+          allVMs.push({
+            vmid,
+            name: vmName,
+            node: nodeName,
+            type: 'qemu',
+            template: isTpl,
+            status,
+            cpu,
+            mem,
+            maxmem,
+            uptime,
+            disk,
+            maxdisk,
+          });
         }
         
-        // Get LXC containers
-        console.log(`Fetching LXC containers from /nodes/${nodeName}/lxc`);
-        const containers = await proxmoxRequest(`/nodes/${nodeName}/lxc`);
-        console.log(`Raw LXC containers response:`, JSON.stringify(containers, null, 2));
-        console.log(`Container response type:`, typeof containers, Array.isArray(containers) ? 'array' : 'not array');
-        console.log(`Container count:`, containers?.length || 0);
-        
-        if (containers) {
-          // Handle both array and object responses
-          const containerList = Array.isArray(containers) ? containers : (containers.data || [containers]);
-          
-          if (containerList.length > 0) {
-            console.log(`Processing ${containerList.length} LXC containers...`);
-            for (const container of containerList) {
-              const vmid = container?.vmid || container?.id;
-              const containerName = container?.name || `CT ${vmid}`;
-              
-              if (!vmid) {
-                console.warn('Skipping container with no vmid:', JSON.stringify(container, null, 2));
-                continue;
-              }
-              
-              console.log(`  Processing container ${vmid} (${containerName})`);
-              
-              try {
-                // Get container status: GET /api2/json/nodes/{node}/lxc/{vmid}/status/current
-                const status = await proxmoxRequest(`/nodes/${nodeName}/lxc/${vmid}/status/current`);
-                console.log(`    Status for container ${vmid}:`, status?.status || 'unknown');
-                
-                allVMs.push({
-                  vmid: vmid,
-                  name: containerName,
-                  node: nodeName,
-                  type: 'lxc',
-                  status: status?.status || 'unknown',
-                  cpu: status?.cpu || 0,
-                  mem: status?.mem || 0,
-                  maxmem: status?.maxmem || 0,
-                  uptime: status?.uptime || 0,
-                  disk: status?.disk || 0,
-                  maxdisk: status?.maxdisk || 0,
-                });
-              } catch (err) {
-                console.warn(`    Error fetching status for container ${vmid}:`, err.message);
-                allVMs.push({
-                  vmid: vmid,
-                  name: containerName,
-                  node: nodeName,
-                  type: 'lxc',
-                  status: 'unknown',
-                });
-              }
+        // LXC containers (full=1 for consistent response)
+        const containers = await proxmoxRequest(`/nodes/${nodeName}/lxc?full=1`);
+        const containerList = toVMList(containers);
+
+        for (const container of containerList) {
+          const vmid = container?.vmid ?? container?.id;
+          const containerName = container?.name ?? `CT ${vmid}`;
+          if (vmid == null) continue;
+
+          let status = container?.status ?? 'unknown';
+          let cpu = container?.cpu ?? 0;
+          let mem = container?.mem ?? 0;
+          let maxmem = container?.maxmem ?? 0;
+          let uptime = container?.uptime ?? 0;
+          let disk = container?.disk ?? 0;
+          let maxdisk = container?.maxdisk ?? 0;
+          try {
+            const statusRes = await proxmoxRequest(`/nodes/${nodeName}/lxc/${vmid}/status/current`);
+            if (statusRes) {
+              status = statusRes.status ?? status;
+              cpu = statusRes.cpu ?? cpu;
+              mem = statusRes.mem ?? mem;
+              maxmem = statusRes.maxmem ?? maxmem;
+              uptime = statusRes.uptime ?? uptime;
+              disk = statusRes.disk ?? disk;
+              maxdisk = statusRes.maxdisk ?? maxdisk;
             }
-          } else {
-            console.log(`No LXC containers found on node ${nodeName}`);
-          }
+          } catch (_) {}
+
+          allVMs.push({
+            vmid,
+            name: containerName,
+            node: nodeName,
+            type: 'lxc',
+            template: false,
+            status,
+            cpu,
+            mem,
+            maxmem,
+            uptime,
+            disk,
+            maxdisk,
+          });
         }
       } catch (err) {
         console.error(`Error fetching VMs from node ${nodeName}:`, err.message);
-        console.error('Full error:', err);
       }
     }
     
@@ -349,8 +307,6 @@ export async function getVMs() {
       }
     }
     
-    console.log(`\n=== Summary: Total VMs/containers found: ${allVMs.length} ===`);
-    console.log('VM list:', JSON.stringify(allVMs.map(v => ({ vmid: v.vmid, name: v.name, node: v.node, pool: v.pool })), null, 2));
     return allVMs;
   } catch (error) {
     console.error('Error fetching VMs:', error);
@@ -739,11 +695,22 @@ export async function getNodes() {
   }
 }
 
-// Get QEMU VM templates only (VMs with template=1, e.g. tmpl-Kali, tmpl-Win11)
+// Known template VM names (clone sources)
+const TEMPLATE_NAME_PATTERN = /^tmpl-/i;
+const KNOWN_TEMPLATE_NAMES = ['tmpl-kali', 'tmpl-win11'];
+
+function isTemplateVM(vm) {
+  if (!vm || vm.type !== 'qemu') return false;
+  if (vm.template === true) return true;
+  const name = (vm.name || '').toLowerCase().trim();
+  return TEMPLATE_NAME_PATTERN.test(name) || KNOWN_TEMPLATE_NAMES.includes(name);
+}
+
+// Get QEMU VM templates only (VMs with template=1 or name like tmpl-Kali, tmpl-Win11)
 export async function getTemplates() {
   try {
     const vms = await getVMs();
-    return (vms || []).filter(vm => vm.type === 'qemu' && vm.template === true);
+    return (vms || []).filter(isTemplateVM);
   } catch (error) {
     console.error('Error fetching templates:', error);
     throw error;
