@@ -216,15 +216,8 @@ const Proxmox = () => {
     }
   };
 
-  // Build VM name with date: "UserInput-MM-DD-YYYY" (hyphen, no space — Proxmox may not like spaces)
-  const getVmNameWithDate = (baseName) => {
-    const trimmed = (baseName || '').trim() || 'VM';
-    const now = new Date();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    const yyyy = now.getFullYear();
-    return `${trimmed}-${mm}-${dd}-${yyyy}`;
-  };
+  // VM name for clone: use base name only (Proxmox requires valid DNS-style name; date suffix was rejected)
+  const getVmName = (baseName) => (baseName || '').trim() || 'VM';
 
   // Create VM from template (clone on pve-node0; task runs on backend)
   const handleCreateFromTemplate = async () => {
@@ -237,13 +230,13 @@ const Proxmox = () => {
       setSnackbar({ open: true, message: 'Invalid template selection', severity: 'error' });
       return;
     }
-    const nameWithDate = getVmNameWithDate(createConfig.name);
+    const vmName = getVmName(createConfig.name);
     try {
       setCreateSubmitting(true);
       const response = await api.post('/api/proxmox/vms/create-from-template', {
         templateNode,
         templateVmid: parseInt(templateVmid, 10),
-        name: nameWithDate,
+        name: vmName,
       });
       const { name, node, vmid } = response.data;
       setSnackbar({
@@ -533,7 +526,7 @@ const Proxmox = () => {
             />
             {createConfig.name?.trim() && (
               <Typography variant="caption" color="text.secondary">
-                VM will be named: <strong>{getVmNameWithDate(createConfig.name)}</strong>
+                VM will be named: <strong>{getVmName(createConfig.name)}</strong>
               </Typography>
             )}
             <Typography variant="caption" color="text.secondary">
