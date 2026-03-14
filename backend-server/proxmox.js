@@ -10,8 +10,9 @@ const PROXMOX_TOKEN_SECRET = process.env.PROXMOX_TOKEN_SECRET || '';
 const PROXMOX_USER = process.env.PROXMOX_USER || 'root';
 const PROXMOX_REALM = process.env.PROXMOX_REALM || 'pam';
 
-// Base URL for Proxmox API
-const PROXMOX_BASE_URL = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/api2/json`;
+// Base URLs for Proxmox API (extjs required for clone on some versions)
+const PROXMOX_BASE_URL_JSON = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/api2/json`;
+const PROXMOX_BASE_URL_EXTJS = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/api2/extjs`;
 
 // Proxmox API expects application/x-www-form-urlencoded for POST/PUT, not JSON
 function toFormUrlEncoded(obj) {
@@ -27,9 +28,11 @@ function toFormUrlEncoded(obj) {
 
 // Helper function to make Proxmox API requests
 // Proxmox API returns: { data: [...] } format
-async function proxmoxRequest(endpoint, method = 'GET', data = null) {
+// options.useExtjs: use /api2/extjs/ base (required for clone on some Proxmox versions)
+async function proxmoxRequest(endpoint, method = 'GET', data = null, options = {}) {
+  const baseUrl = options.useExtjs ? PROXMOX_BASE_URL_EXTJS : PROXMOX_BASE_URL_JSON;
   return new Promise((resolve, reject) => {
-    const url = new URL(`${PROXMOX_BASE_URL}${endpoint}`);
+    const url = new URL(`${baseUrl}${endpoint}`);
     
     const headers = {};
     
@@ -42,7 +45,7 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
     let body = null;
     if (data && (method === 'POST' || method === 'PUT')) {
       body = toFormUrlEncoded(data);
-      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
       headers['Content-Length'] = Buffer.byteLength(body, 'utf8');
     }
     
@@ -430,30 +433,26 @@ export async function getAvailableISOsAndTemplates(node) {
 }
 
 // Clone a VM
-// API: POST /api2/json/nodes/{node}/qemu/{vmid}/clone
+// API: POST /api2/extjs/nodes/{node}/qemu/{vmid}/clone (extjs matches working Proxmox behavior)
 export async function cloneVM(node, sourceVmid, newVmid, config) {
   try {
     const vmType = config.type || 'qemu';
     const endpoint = `/nodes/${node}/${vmType}/${sourceVmid}/clone`;
-    
+    // Match working request: newid, name, target only (omit full when false for linked clone)
     const cloneConfig = {
       newid: parseInt(newVmid),
       name: config.name || `Clone of VM ${sourceVmid}`,
-      full: config.full || false, // false = linked clone, true = full clone
-      target: config.target || node, // target node (default: same as source)
+      target: config.target || node,
     };
-    
-    // Add pool if provided
+    if (config.full === true) {
+      cloneConfig.full = 1;
+    }
     if (config.pool) {
       cloneConfig.pool = config.pool;
     }
-    
-    // Add storage target if provided
     if (config.storage) {
       cloneConfig.storage = config.storage;
     }
-    
-    // Add other config params
     if (config.params) {
       Object.assign(cloneConfig, config.params);
     }
@@ -464,7 +463,7 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
     
     let result;
     try {
-      result = await proxmoxRequest(endpoint, 'POST', cloneConfig);
+      result = await proxmoxRequest(endpoint, 'POST', cloneConfig, { useExtjs: true });
       console.log(`Clone response:`, result);
     } catch (error) {
       // If the error is about parsing JSON but status was 200, clone might have succeeded
