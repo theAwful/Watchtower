@@ -24,10 +24,8 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
-  RadioGroup,
   FormControlLabel,
   Radio,
-  FormLabel,
   Snackbar,
 } from '@mui/material';
 import {
@@ -47,23 +45,20 @@ const Proxmox = () => {
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [deployDialogOpen, setDeployDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [vmToDelete, setVmToDelete] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
-  const [deployConfig, setDeployConfig] = useState({
-    node: '',
-    vmid: '',
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createConfig, setCreateConfig] = useState({
+    template: '', // selected template key "node/vmid"
     name: '',
+    vmid: '',
     pool: '',
-    installType: 'none',
-    iso: '',
-    template: '',
-    cloneFrom: '',
-    cloneType: 'linked',
+    full: false,
   });
-  const [isos, setIsos] = useState([]);
-  const [templates, setTemplates] = useState([]);
+  const [vmTemplates, setVmTemplates] = useState([]); // QEMU templates (tmpl-Kali, tmpl-Win11)
+  const [nextVmid, setNextVmid] = useState(null);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
 
   // Format bytes to human readable
   const formatBytes = (bytes) => {
@@ -120,21 +115,19 @@ const Proxmox = () => {
     }
   };
 
-  // Fetch ISOs and templates for a node
-  const fetchISOsAndTemplates = async (node) => {
-    if (!node) {
-      setIsos([]);
-      setTemplates([]);
-      return;
-    }
+  // Fetch QEMU VM templates (tmpl-Kali, tmpl-Win11, etc.) and next VMID for Create VM dialog
+  const fetchTemplatesAndNextVmid = async () => {
     try {
-      const response = await api.get(`/api/proxmox/nodes/${node}/isos-templates`);
-      setIsos(response.data.isos || []);
-      setTemplates(response.data.templates || []);
+      const [tplRes, idRes] = await Promise.all([
+        api.get('/api/proxmox/templates'),
+        api.get('/api/proxmox/next-vmid'),
+      ]);
+      setVmTemplates(tplRes.data.templates || []);
+      setNextVmid(idRes.data.nextid ?? null);
     } catch (err) {
-      console.error('Error fetching ISOs and templates:', err);
-      setIsos([]);
-      setTemplates([]);
+      console.error('Error fetching templates or next VMID:', err);
+      setVmTemplates([]);
+      setNextVmid(null);
     }
   };
 
@@ -150,16 +143,12 @@ const Proxmox = () => {
     fetchVMs();
   }, 10000);
 
-  // When deploy dialog opens, fetch ISOs/templates if node is selected
+  // When Create VM dialog opens, fetch templates and next VMID
   useEffect(() => {
-    if (deployDialogOpen && deployConfig.node) {
-      fetchISOsAndTemplates(deployConfig.node);
-      // Also fetch VMs for cloning
-      if (deployConfig.installType === 'clone') {
-        fetchVMs();
-      }
+    if (createDialogOpen) {
+      fetchTemplatesAndNextVmid();
     }
-  }, [deployDialogOpen, deployConfig.node, deployConfig.installType]);
+  }, [createDialogOpen]);
 
   // Group VMs by pool
   const groupedVMs = () => {
@@ -243,47 +232,44 @@ const Proxmox = () => {
     }
   };
 
-  // Deploy VM
-  const handleDeploy = async () => {
+  // Create VM from template (clone + load-balanced node placement)
+  const handleCreateFromTemplate = async () => {
+    if (!createConfig.template) {
+      setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
+      return;
+    }
+    const [templateNode, templateVmid] = createConfig.template.split('/');
+    if (!templateNode || !templateVmid) {
+      setSnackbar({ open: true, message: 'Invalid template selection', severity: 'error' });
+      return;
+    }
     try {
-      const config = {
-        name: deployConfig.name,
-        pool: deployConfig.pool === 'unassigned' ? null : deployConfig.pool,
-        type: 'qemu',
-      };
-
-      if (deployConfig.installType === 'iso' && deployConfig.iso) {
-        config.iso = deployConfig.iso;
-      } else if (deployConfig.installType === 'clone' && deployConfig.cloneFrom) {
-        const sourceVM = vms.find(v => `${v.node}/${v.vmid}` === deployConfig.cloneFrom);
-        if (sourceVM) {
-          config.cloneFrom = deployConfig.cloneFrom.split('/')[1];
-          config.full = deployConfig.cloneType === 'full';
-        }
-      }
-
-      await api.post('/api/proxmox/vms/deploy', {
-        node: deployConfig.node,
-        vmid: parseInt(deployConfig.vmid),
-        config,
+      setCreateSubmitting(true);
+      const response = await api.post('/api/proxmox/vms/create-from-template', {
+        templateNode,
+        templateVmid: parseInt(templateVmid, 10),
+        name: createConfig.name || undefined,
+        vmid: createConfig.vmid ? parseInt(createConfig.vmid, 10) : undefined,
+        pool: createConfig.pool && createConfig.pool !== 'unassigned' ? createConfig.pool : undefined,
+        full: createConfig.full,
       });
-
-      setSnackbar({ open: true, message: 'VM deployment started', severity: 'success' });
-      setDeployDialogOpen(false);
-      setDeployConfig({
-        node: '',
-        vmid: '',
-        name: '',
-        pool: '',
-        installType: 'none',
-        iso: '',
-        template: '',
-        cloneFrom: '',
-        cloneType: 'linked',
+      const { name, node, vmid } = response.data;
+      setSnackbar({
+        open: true,
+        message: `VM "${name || vmid}" created on node ${node} (load-balanced)`,
+        severity: 'success',
       });
+      setCreateDialogOpen(false);
+      setCreateConfig({ template: '', name: '', vmid: '', pool: '', full: false });
       setTimeout(() => fetchVMs(), 2000);
     } catch (err) {
-      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to deploy VM', severity: 'error' });
+      setSnackbar({
+        open: true,
+        message: err.response?.data?.error || 'Failed to create VM from template',
+        severity: 'error',
+      });
+    } finally {
+      setCreateSubmitting(false);
     }
   };
 
@@ -407,13 +393,12 @@ const Proxmox = () => {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={() => {
-              setDeployDialogOpen(true);
-              fetchNodes();
+              setCreateDialogOpen(true);
               fetchPools();
             }}
             sx={{ ml: 2 }}
           >
-            Deploy New VM
+            Create VM
           </Button>
         </Box>
       </Box>
@@ -449,52 +434,52 @@ const Proxmox = () => {
         </>
       )}
 
-      {/* Deploy VM Dialog */}
-      <Dialog open={deployDialogOpen} onClose={() => setDeployDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Deploy New VM</DialogTitle>
+      {/* Create VM from template dialog — node is chosen by load balancing */}
+      <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Create VM from template</DialogTitle>
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
-            <FormControl fullWidth>
-              <InputLabel>Node</InputLabel>
+            <FormControl fullWidth required>
+              <InputLabel>Template</InputLabel>
               <Select
-                value={deployConfig.node}
-                onChange={(e) => {
-                  setDeployConfig({ ...deployConfig, node: e.target.value });
-                  fetchISOsAndTemplates(e.target.value);
-                }}
-                label="Node"
+                value={createConfig.template}
+                onChange={(e) => setCreateConfig({ ...createConfig, template: e.target.value })}
+                label="Template"
               >
-                {nodes.map((node) => (
-                  <MenuItem key={node.node} value={node.node}>
-                    {node.node}
+                {vmTemplates.map((t) => (
+                  <MenuItem key={`${t.node}/${t.vmid}`} value={`${t.node}/${t.vmid}`}>
+                    {t.vmid} — {t.name || `Template ${t.vmid}`}
                   </MenuItem>
                 ))}
+                {vmTemplates.length === 0 && (
+                  <MenuItem disabled>No templates found (e.g. tmpl-Kali, tmpl-Win11)</MenuItem>
+                )}
               </Select>
             </FormControl>
 
             <TextField
               fullWidth
-              label="VMID"
-              value={deployConfig.vmid}
-              onChange={(e) => setDeployConfig({ ...deployConfig, vmid: e.target.value })}
-              type="number"
-              required
+              label="Name"
+              value={createConfig.name}
+              onChange={(e) => setCreateConfig({ ...createConfig, name: e.target.value })}
+              placeholder="VM display name"
             />
 
             <TextField
               fullWidth
-              label="Name"
-              value={deployConfig.name}
-              onChange={(e) => setDeployConfig({ ...deployConfig, name: e.target.value })}
-              required
+              label="VMID (optional)"
+              value={createConfig.vmid || (nextVmid ?? '')}
+              onChange={(e) => setCreateConfig({ ...createConfig, vmid: e.target.value })}
+              type="number"
+              placeholder={nextVmid != null ? `Auto: ${nextVmid}` : 'Auto'}
             />
 
             <FormControl fullWidth>
-              <InputLabel>Pool (Optional)</InputLabel>
+              <InputLabel>Pool (optional)</InputLabel>
               <Select
-                value={deployConfig.pool}
-                onChange={(e) => setDeployConfig({ ...deployConfig, pool: e.target.value })}
-                label="Pool (Optional)"
+                value={createConfig.pool || 'unassigned'}
+                onChange={(e) => setCreateConfig({ ...createConfig, pool: e.target.value })}
+                label="Pool (optional)"
               >
                 <MenuItem value="unassigned">Unassigned</MenuItem>
                 {pools.map((pool) => (
@@ -505,76 +490,28 @@ const Proxmox = () => {
               </Select>
             </FormControl>
 
-            <FormControl component="fieldset">
-              <FormLabel component="legend">Installation Type</FormLabel>
-              <RadioGroup
-                value={deployConfig.installType}
-                onChange={(e) => setDeployConfig({ ...deployConfig, installType: e.target.value })}
-              >
-                <FormControlLabel value="none" control={<Radio />} label="None" />
-                <FormControlLabel value="iso" control={<Radio />} label="ISO Image" />
-                <FormControlLabel value="clone" control={<Radio />} label="Clone Existing VM" />
-              </RadioGroup>
-            </FormControl>
-
-            {deployConfig.installType === 'iso' && (
-              <FormControl fullWidth>
-                <InputLabel>ISO Image</InputLabel>
-                <Select
-                  value={deployConfig.iso}
-                  onChange={(e) => setDeployConfig({ ...deployConfig, iso: e.target.value })}
-                  label="ISO Image"
-                >
-                  {isos.map((iso) => (
-                    <MenuItem key={iso.volid} value={iso.volid}>
-                      {iso.volid}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            )}
-
-            {deployConfig.installType === 'clone' && (
-              <>
-                <FormControl fullWidth>
-                  <InputLabel>Source VM</InputLabel>
-                  <Select
-                    value={deployConfig.cloneFrom}
-                    onChange={(e) => setDeployConfig({ ...deployConfig, cloneFrom: e.target.value })}
-                    label="Source VM"
-                  >
-                    {vms
-                      .filter((vm) => vm.node === deployConfig.node)
-                      .map((vm) => (
-                        <MenuItem key={`${vm.node}/${vm.vmid}`} value={`${vm.node}/${vm.vmid}`}>
-                          {vm.name || `VM-${vm.vmid}`} ({vm.vmid})
-                        </MenuItem>
-                      ))}
-                  </Select>
-                </FormControl>
-
-                <FormControl component="fieldset">
-                  <FormLabel component="legend">Clone Type</FormLabel>
-                  <RadioGroup
-                    value={deployConfig.cloneType}
-                    onChange={(e) => setDeployConfig({ ...deployConfig, cloneType: e.target.value })}
-                  >
-                    <FormControlLabel value="linked" control={<Radio />} label="Linked Clone (Faster)" />
-                    <FormControlLabel value="full" control={<Radio />} label="Full Clone (Independent)" />
-                  </RadioGroup>
-                </FormControl>
-              </>
-            )}
+            <FormControlLabel
+              control={
+                <Radio
+                  checked={createConfig.full}
+                  onChange={(e) => setCreateConfig({ ...createConfig, full: e.target.checked })}
+                />
+              }
+              label="Full clone (independent copy; slower, more disk)"
+            />
+            <Typography variant="caption" color="text.secondary">
+              The VM will be placed on the node with the most free resources (load-balanced).
+            </Typography>
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeployDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
           <Button
-            onClick={handleDeploy}
+            onClick={handleCreateFromTemplate}
             variant="contained"
-            disabled={!deployConfig.node || !deployConfig.vmid || !deployConfig.name}
+            disabled={!createConfig.template || createSubmitting}
           >
-            Deploy
+            {createSubmitting ? 'Creating…' : 'Create VM'}
           </Button>
         </DialogActions>
       </Dialog>

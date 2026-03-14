@@ -220,6 +220,7 @@ export async function getVMs() {
                   name: vmName,
                   node: nodeName,
                   type: 'qemu',
+                  template: vm?.template === 1,
                   status: status?.status || 'unknown',
                   cpu: status?.cpu || 0,
                   mem: status?.mem || 0,
@@ -236,6 +237,7 @@ export async function getVMs() {
                   name: vmName,
                   node: nodeName,
                   type: 'qemu',
+                  template: vm?.template === 1,
                   status: 'unknown',
                 });
               }
@@ -735,6 +737,118 @@ export async function getNodes() {
     console.error('Error fetching nodes:', error);
     throw error;
   }
+}
+
+// Get QEMU VM templates only (VMs with template=1, e.g. tmpl-Kali, tmpl-Win11)
+export async function getTemplates() {
+  try {
+    const vms = await getVMs();
+    return (vms || []).filter(vm => vm.type === 'qemu' && vm.template === true);
+  } catch (error) {
+    console.error('Error fetching templates:', error);
+    throw error;
+  }
+}
+
+// Get next available VMID from cluster
+// API: GET /api2/json/cluster/nextid
+export async function getNextVmid() {
+  try {
+    const nextId = await proxmoxRequest('/cluster/nextid');
+    return nextId != null ? parseInt(nextId, 10) : null;
+  } catch (error) {
+    console.error('Error fetching next VMID:', error);
+    throw error;
+  }
+}
+
+// Score nodes for load balancing: higher = less constrained (more free memory, lower CPU)
+function scoreNode(node) {
+  const maxmem = node.maxmem || 1;
+  const mem = node.mem || 0;
+  const cpu = node.cpu || 0;
+  const freeMemRatio = (maxmem - mem) / maxmem;
+  const cpuHeadroom = 1 - cpu;
+  return freeMemRatio * 0.5 + cpuHeadroom * 0.5;
+}
+
+// Get the best node for placing a new VM (least constrained)
+export async function getBestNodeForPlacement() {
+  try {
+    const nodes = await getNodes();
+    if (!nodes || nodes.length === 0) return null;
+    const withScores = nodes
+      .filter(n => n.status === 'online')
+      .map(n => ({ ...n, score: scoreNode(n) }));
+    withScores.sort((a, b) => b.score - a.score);
+    return withScores[0]?.node || nodes[0].node;
+  } catch (error) {
+    console.error('Error getting best node:', error);
+    throw error;
+  }
+}
+
+// Wait for a Proxmox task (UPID) to complete
+// API: GET /api2/json/nodes/{node}/tasks/{upid}/status
+export async function waitForTask(node, upid, options = {}) {
+  const { pollMs = 2000, maxWaitMs = 600000 } = options; // default 10 min max
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const status = await proxmoxRequest(`/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`);
+    if (status?.status === 'stopped') {
+      return status;
+    }
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+  throw new Error(`Task ${upid} did not complete within ${maxWaitMs}ms`);
+}
+
+// Migrate a VM to another node
+// API: POST /api2/json/nodes/{node}/qemu/{vmid}/migrate
+export async function migrateVM(node, vmid, targetNode, type = 'qemu') {
+  try {
+    const endpoint = `/nodes/${node}/${type}/${vmid}/migrate`;
+    const result = await proxmoxRequest(endpoint, 'POST', { target: targetNode });
+    return result;
+  } catch (error) {
+    console.error('Error migrating VM:', error);
+    throw error;
+  }
+}
+
+// Create a new VM by cloning a template, with load-balanced node placement
+export async function createFromTemplate(config) {
+  const { templateVmid, templateNode, name, vmid, pool, full } = config;
+  if (!templateVmid || !templateNode) {
+    throw new Error('templateVmid and templateNode are required');
+  }
+  const newVmid = vmid != null ? parseInt(vmid, 10) : await getNextVmid();
+  if (!newVmid) {
+    throw new Error('Could not determine new VMID (provide vmid or ensure cluster/nextid works)');
+  }
+  const bestNode = await getBestNodeForPlacement();
+  if (!bestNode) {
+    throw new Error('No online node available for placement');
+  }
+  const cloneConfig = {
+    name: name || `VM-${newVmid}`,
+    pool: pool || undefined,
+    full: full === true,
+    type: 'qemu',
+  };
+  const cloneResult = await cloneVM(templateNode, templateVmid, newVmid, cloneConfig);
+  const upid = typeof cloneResult === 'string' && cloneResult.startsWith('UPID:')
+    ? cloneResult
+    : cloneResult?.upid;
+  if (upid) {
+    await waitForTask(templateNode, upid);
+  }
+  let currentNode = templateNode;
+  if (bestNode !== templateNode) {
+    await migrateVM(templateNode, newVmid, bestNode, 'qemu');
+    currentNode = bestNode;
+  }
+  return { vmid: newVmid, node: currentNode, name: cloneConfig.name };
 }
 
 // Get storage pools

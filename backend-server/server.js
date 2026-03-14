@@ -324,6 +324,59 @@ app.get('/api/proxmox/nodes', async (req, res) => {
   }
 });
 
+// Get QEMU VM templates (e.g. tmpl-Kali, tmpl-Win11)
+app.get('/api/proxmox/templates', async (req, res) => {
+  try {
+    const templates = await proxmox.getTemplates();
+    res.json({ templates: templates || [] });
+  } catch (error) {
+    console.error('Error fetching templates:', error);
+    res.status(500).json({
+      templates: [],
+      error: error.message || 'Failed to fetch templates',
+    });
+  }
+});
+
+// Get next available VMID
+app.get('/api/proxmox/next-vmid', async (req, res) => {
+  try {
+    const nextId = await proxmox.getNextVmid();
+    res.json({ nextid: nextId });
+  } catch (error) {
+    console.error('Error fetching next VMID:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to fetch next VMID',
+    });
+  }
+});
+
+// Create VM from template (clone + load-balanced placement)
+app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
+  try {
+    const { templateVmid, templateNode, name, vmid, pool, full } = req.body;
+    if (!templateVmid || !templateNode) {
+      return res.status(400).json({
+        error: 'templateVmid and templateNode are required',
+      });
+    }
+    const result = await proxmox.createFromTemplate({
+      templateVmid: parseInt(templateVmid, 10),
+      templateNode,
+      name: name || undefined,
+      vmid: vmid != null ? parseInt(vmid, 10) : undefined,
+      pool: pool || undefined,
+      full: full === true,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('Error creating VM from template:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to create VM from template',
+    });
+  }
+});
+
 // Get available ISOs and templates for a node
 app.get('/api/proxmox/nodes/:node/isos-templates', async (req, res) => {
   try {
