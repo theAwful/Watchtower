@@ -134,9 +134,17 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null) {
             return;
           }
           
-          // Check for API errors
+          // Check for API errors (Proxmox can return errors as array or object)
           if (res.statusCode >= 400) {
-            const errorMsg = parsed.errors?.[0]?.message || `Proxmox API error: ${res.statusCode}`;
+            let errorMsg = `Proxmox API error: ${res.statusCode}`;
+            if (parsed.errors) {
+              if (Array.isArray(parsed.errors) && parsed.errors[0]?.message) {
+                errorMsg = parsed.errors[0].message;
+              } else if (typeof parsed.errors === 'object' && !Array.isArray(parsed.errors)) {
+                const parts = Object.entries(parsed.errors).map(([k, v]) => `${k}: ${v}`);
+                errorMsg = parts.length ? parts.join('; ') : errorMsg;
+              }
+            }
             reject(new Error(errorMsg));
             return;
           }
@@ -432,6 +440,7 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
       newid: parseInt(newVmid),
       name: config.name || `Clone of VM ${sourceVmid}`,
       full: config.full || false, // false = linked clone, true = full clone
+      target: config.target || node, // target node (default: same as source)
     };
     
     // Add pool if provided
