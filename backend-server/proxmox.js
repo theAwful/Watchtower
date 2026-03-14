@@ -741,13 +741,20 @@ export async function getBestNodeForPlacement() {
   }
 }
 
+// Get status of a Proxmox task (UPID) - for polling from frontend
+// API: GET /api2/json/nodes/{node}/tasks/{upid}/status
+export async function getTaskStatus(node, upid) {
+  const status = await proxmoxRequest(`/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`);
+  return status;
+}
+
 // Wait for a Proxmox task (UPID) to complete
 // API: GET /api2/json/nodes/{node}/tasks/{upid}/status
 export async function waitForTask(node, upid, options = {}) {
   const { pollMs = 2000, maxWaitMs = 600000 } = options; // default 10 min max
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
-    const status = await proxmoxRequest(`/nodes/${node}/tasks/${encodeURIComponent(upid)}/status`);
+    const status = await getTaskStatus(node, upid);
     if (status?.status === 'stopped') {
       return status;
     }
@@ -769,7 +776,7 @@ export async function migrateVM(node, vmid, targetNode, type = 'qemu') {
   }
 }
 
-// Create a new VM by cloning a template, with load-balanced node placement
+// Start VM creation by cloning a template; returns task info for polling (does not wait)
 export async function createFromTemplate(config) {
   const { templateVmid, templateNode, name, vmid, pool, full } = config;
   if (!templateVmid || !templateNode) {
@@ -793,15 +800,20 @@ export async function createFromTemplate(config) {
   const upid = typeof cloneResult === 'string' && cloneResult.startsWith('UPID:')
     ? cloneResult
     : cloneResult?.upid;
-  if (upid) {
-    await waitForTask(templateNode, upid);
-  }
+  return {
+    task: { upid, node: templateNode, vmid: newVmid, name: cloneConfig.name },
+    targetNode: bestNode,
+  };
+}
+
+// After clone task has completed, run migration if needed and return final VM info
+export async function finalizeCreateFromTemplate({ templateNode, vmid, targetNode, name }) {
   let currentNode = templateNode;
-  if (bestNode !== templateNode) {
-    await migrateVM(templateNode, newVmid, bestNode, 'qemu');
-    currentNode = bestNode;
+  if (targetNode && templateNode !== targetNode) {
+    await migrateVM(templateNode, vmid, targetNode, 'qemu');
+    currentNode = targetNode;
   }
-  return { vmid: newVmid, node: currentNode, name: cloneConfig.name };
+  return { vmid: parseInt(vmid, 10), node: currentNode, name: name || `VM-${vmid}` };
 }
 
 // Get storage pools

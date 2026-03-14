@@ -354,7 +354,7 @@ app.get('/api/proxmox/next-vmid', async (req, res) => {
   }
 });
 
-// Create VM from template (clone + load-balanced placement)
+// Create VM from template (starts clone, returns task for polling)
 app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
   try {
     const { templateVmid, templateNode, name, vmid, pool, full } = req.body;
@@ -376,6 +376,48 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
     console.error('Error creating VM from template:', error);
     res.status(500).json({
       error: error.message || 'Failed to create VM from template',
+    });
+  }
+});
+
+// Poll task status (clone progress)
+app.get('/api/proxmox/tasks/status', async (req, res) => {
+  try {
+    const { node, upid } = req.query;
+    if (!node || !upid) {
+      return res.status(400).json({ error: 'node and upid are required' });
+    }
+    const status = await proxmox.getTaskStatus(node, decodeURIComponent(upid));
+    res.json(status || {});
+  } catch (error) {
+    console.error('Error fetching task status:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to get task status',
+      status: 'error',
+    });
+  }
+});
+
+// Finalize VM creation after clone task completes (migrate if needed)
+app.post('/api/proxmox/vms/create-from-template/finalize', async (req, res) => {
+  try {
+    const { templateNode, vmid, targetNode, name } = req.body;
+    if (!templateNode || vmid == null) {
+      return res.status(400).json({
+        error: 'templateNode and vmid are required',
+      });
+    }
+    const result = await proxmox.finalizeCreateFromTemplate({
+      templateNode,
+      vmid: parseInt(vmid, 10),
+      targetNode: targetNode || templateNode,
+      name: name || undefined,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('Error finalizing VM creation:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to finalize VM creation',
     });
   }
 });
