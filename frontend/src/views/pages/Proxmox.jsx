@@ -25,7 +25,6 @@ import {
   FormControl,
   InputLabel,
   Snackbar,
-  LinearProgress,
 } from '@mui/material';
 import {
   PlayArrow as PlayIcon,
@@ -60,8 +59,6 @@ const Proxmox = () => {
   });
   const [vmTemplates, setVmTemplates] = useState([]);
   const [createSubmitting, setCreateSubmitting] = useState(false);
-  // Progress for async create: { task, targetNode } while clone runs, then 'finalizing' then null
-  const [createProgress, setCreateProgress] = useState(null);
 
   // Format bytes to human readable
   const formatBytes = (bytes) => {
@@ -229,7 +226,7 @@ const Proxmox = () => {
     return `${trimmed} ${mm}-${dd}-${yyyy}`;
   };
 
-  // Create VM from template: start clone, then poll task and finalize
+  // Create VM from template (clone on pve-node0; task runs on backend)
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
@@ -248,88 +245,25 @@ const Proxmox = () => {
         templateVmid: parseInt(templateVmid, 10),
         name: nameWithDate,
       });
-      const { task, targetNode } = response.data;
-      if (!task?.upid || !task?.node) {
-        setSnackbar({ open: true, message: 'Invalid response from server (no task)', severity: 'error' });
-        return;
-      }
-      setCreateProgress({ task, targetNode });
+      const { name, node, vmid } = response.data;
+      setSnackbar({
+        open: true,
+        message: `VM creation started: "${name || vmid}" on ${node}. It may take a minute—refresh the list.`,
+        severity: 'success',
+      });
       setCreateDialogOpen(false);
+      setCreateConfig({ template: '', name: '' });
+      setTimeout(() => fetchVMs(), 3000);
     } catch (err) {
       setSnackbar({
         open: true,
-        message: err.response?.data?.error || 'Failed to start VM creation',
+        message: err.response?.data?.error || 'Failed to create VM from template',
         severity: 'error',
       });
     } finally {
       setCreateSubmitting(false);
     }
   };
-
-  // Poll clone task status; when done, finalize and clear progress
-  useEffect(() => {
-    if (!createProgress || createProgress === 'finalizing') return;
-    const { task, targetNode } = createProgress;
-    if (!task?.upid || !task?.node) return;
-
-    const pollMs = 2000;
-    const interval = setInterval(async () => {
-      try {
-        const res = await api.get('/api/proxmox/tasks/status', {
-          params: { node: task.node, upid: task.upid },
-        });
-        const data = res.data || {};
-        const status = data.status;
-        const exitstatus = data.exitstatus;
-
-        if (status === 'stopped') {
-          clearInterval(interval);
-          if (exitstatus === 'OK' || exitstatus === undefined) {
-            setCreateProgress('finalizing');
-            try {
-              await api.post('/api/proxmox/vms/create-from-template/finalize', {
-                templateNode: task.node,
-                vmid: task.vmid,
-                targetNode: targetNode || task.node,
-                name: task.name,
-              });
-              setSnackbar({
-                open: true,
-                message: `VM "${task.name || task.vmid}" created on node ${targetNode || task.node}`,
-                severity: 'success',
-              });
-              setCreateConfig({ template: '', name: '' });
-              fetchVMs();
-            } catch (err) {
-              setSnackbar({
-                open: true,
-                message: err.response?.data?.error || 'Finalize failed',
-                severity: 'error',
-              });
-            }
-            setCreateProgress(null);
-          } else {
-            setSnackbar({
-              open: true,
-              message: exitstatus || 'Clone task failed',
-              severity: 'error',
-            });
-            setCreateProgress(null);
-          }
-        }
-      } catch (err) {
-        clearInterval(interval);
-        setSnackbar({
-          open: true,
-          message: err.response?.data?.error || 'Failed to check task status',
-          severity: 'error',
-        });
-        setCreateProgress(null);
-      }
-    }, pollMs);
-
-    return () => clearInterval(interval);
-  }, [createProgress]);
 
   // Render VM table for a single node
   const renderVMTable = (vmList, nodeName) => (
@@ -617,27 +551,6 @@ const Proxmox = () => {
             {createSubmitting ? 'Creating…' : 'Create VM'}
           </Button>
         </DialogActions>
-      </Dialog>
-
-      {/* Create VM progress — clone task running or finalizing */}
-      <Dialog open={!!createProgress} disableEscapeKeyDown>
-        <DialogTitle>
-          {createProgress === 'finalizing'
-            ? 'Placing VM…'
-            : createProgress?.task
-              ? `Creating VM ${createProgress.task.name || createProgress.task.vmid}…`
-              : 'Creating VM…'}
-        </DialogTitle>
-        <DialogContent>
-          <Box sx={{ pt: 1, minWidth: 320 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              {createProgress === 'finalizing'
-                ? 'Migrating to target node if needed.'
-                : 'Clone is running on the Proxmox backend. This may take a minute.'}
-            </Typography>
-            <LinearProgress />
-          </Box>
-        </DialogContent>
       </Dialog>
 
       {/* Delete Confirmation Dialog */}

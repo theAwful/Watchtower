@@ -776,7 +776,8 @@ export async function migrateVM(node, vmid, targetNode, type = 'qemu') {
   }
 }
 
-// Start VM creation by cloning a template; returns task info for polling (does not wait)
+// Create VM by cloning a template. Always targets pve-node0. We don't rely on the clone
+// response (Proxmox creates the task on the backend); we just return the intended vmid/node/name.
 export async function createFromTemplate(config) {
   const { templateVmid, templateNode, name, vmid, pool, full } = config;
   if (!templateVmid || !templateNode) {
@@ -786,24 +787,15 @@ export async function createFromTemplate(config) {
   if (!newVmid) {
     throw new Error('Could not determine new VMID (provide vmid or ensure cluster/nextid works)');
   }
-  const bestNode = await getBestNodeForPlacement();
-  if (!bestNode) {
-    throw new Error('No online node available for placement');
-  }
   const cloneConfig = {
     name: name || `VM-${newVmid}`,
     pool: pool || undefined,
     full: full === true,
     type: 'qemu',
+    target: 'pve-node0',
   };
-  const cloneResult = await cloneVM(templateNode, templateVmid, newVmid, cloneConfig);
-  const upid = typeof cloneResult === 'string' && cloneResult.startsWith('UPID:')
-    ? cloneResult
-    : cloneResult?.upid;
-  return {
-    task: { upid, node: templateNode, vmid: newVmid, name: cloneConfig.name },
-    targetNode: bestNode,
-  };
+  await cloneVM(templateNode, templateVmid, newVmid, cloneConfig);
+  return { vmid: newVmid, node: 'pve-node0', name: cloneConfig.name };
 }
 
 // After clone task has completed, run migration if needed and return final VM info

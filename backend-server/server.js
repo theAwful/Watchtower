@@ -354,7 +354,7 @@ app.get('/api/proxmox/next-vmid', async (req, res) => {
   }
 });
 
-// Create VM from template (starts clone, returns task for polling)
+// Create VM from template (clone on pve-node0; backend task runs async)
 app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
   try {
     const { templateVmid, templateNode, name, vmid, pool, full } = req.body;
