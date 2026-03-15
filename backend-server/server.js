@@ -64,6 +64,7 @@ app.use('/api', (req, res, next) => {
   if (pathOnly === '/api/auth/login' && req.method === 'POST') return next();
   if (pathOnly === '/api/auth/status' && req.method === 'GET') return next();
   if (pathOnly === '/api/health' && req.method === 'GET') return next();
+  if (pathOnly === '/api/proxmox/vnc-ws') return next(); // WebSocket upgrade handled by ws server; no session on upgrade in some setups
   if (!req.session || !req.session.user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -787,6 +788,14 @@ app.get('/vnc-viewer', (req, res) => {
   res.send(VNC_VIEWER_HTML);
 });
 
+// Let WebSocket upgrade reach the ws server; do not send 404 for GET /api/proxmox/vnc-ws
+app.get('/api/proxmox/vnc-ws', (req, res) => {
+  if ((req.headers.upgrade || '').toLowerCase() === 'websocket') {
+    return; // ws server handles upgrade; do not call res.end()
+  }
+  res.status(404).end();
+});
+
 // Serve frontend build in production (single process: API + static UI)
 const frontendDist = path.resolve(__dirname, '..', 'frontend', 'dist');
 const indexHtml = path.join(frontendDist, 'index.html');
@@ -843,6 +852,7 @@ if (WebSocket) {
       const node = params.get('node');
       const vmid = params.get('vmid');
       const type = params.get('type') || 'qemu';
+      console.log('[VNC] Client connected:', { node, vmid, type });
       if (!node || !vmid) {
         clientWs.close(1008, 'Missing node or vmid');
         return;
@@ -863,16 +873,21 @@ if (WebSocket) {
           proxWs.binaryType = 'arraybuffer';
           clientWs.binaryType = 'arraybuffer';
           proxWs.on('open', () => {
+            console.log('[VNC] Proxmox tunnel up:', node, vmid);
             proxWs.on('message', (data) => { if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data); });
             proxWs.on('close', () => clientWs.close());
-            proxWs.on('error', (err) => { console.error('Proxmox VNC ws:', err.message); clientWs.close(); });
+            proxWs.on('error', (err) => { console.error('[VNC] Proxmox ws error:', err.message); clientWs.close(); });
+          });
+          proxWs.on('error', (err) => {
+            console.error('[VNC] Proxmox connect failed:', err.message);
+            clientWs.close(1011, 'Backend could not connect to Proxmox');
           });
           clientWs.on('message', (data) => { if (proxWs.readyState === WebSocket.OPEN) proxWs.send(data); });
           clientWs.on('close', () => proxWs.close());
           clientWs.on('error', () => proxWs.close());
         })
         .catch((err) => {
-          console.error('VNC proxy ticket:', err.message);
+          console.error('[VNC] Ticket failed:', err.message);
           clientWs.close(1011, err.message || 'Failed to get VNC ticket');
         });
     });
