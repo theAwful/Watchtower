@@ -1,11 +1,7 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
-import Dashboard from './views/pages/Dashboard';
-import NUCBuildRequest from './views/pages/NUCBuildRequest';
 import Proxmox from './views/pages/Proxmox';
-import Wiki from './views/pages/Wiki';
-import TaskBoard from './views/pages/TaskBoard';
 import AppLayout from './views/components/AppLayout';
 import Cookies from 'js-cookie';
 
@@ -190,11 +186,8 @@ function App() {
       <Router>
         <Routes>
           <Route path="/" element={<AppLayout toggleTheme={toggleTheme} currentTheme={mode} />}>
-            <Route index element={<Dashboard />} />
-            <Route path="nuc-build-request" element={<NUCBuildRequest />} />
+            <Route index element={<Proxmox />} />
             <Route path="proxmox" element={<Proxmox />} />
-            <Route path="wiki" element={<Wiki />} />
-            <Route path="tasks" element={<TaskBoard />} />
           </Route>
         </Routes>
       </Router>
