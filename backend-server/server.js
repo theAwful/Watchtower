@@ -10,8 +10,16 @@ import fs from 'fs';
 import https from 'https';
 import http from 'http';
 import { fileURLToPath } from 'url';
-import WebSocket from 'ws';
+import { createRequire } from 'module';
 import * as proxmox from './proxmox.js';
+
+const require = createRequire(import.meta.url);
+let WebSocket = null;
+try {
+  WebSocket = require('ws');
+} catch (e) {
+  console.warn('Optional "ws" not installed. VNC console proxy disabled. Run: npm install ws');
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -621,6 +629,11 @@ app.post('/api/proxmox/vms/:node/:vmid/restart', async (req, res) => {
 
 // Get VNC console: returns URL to our proxy viewer (no Proxmox cookie needed)
 app.get('/api/proxmox/vms/:node/:vmid/vnc', async (req, res) => {
+  if (!WebSocket) {
+    return res.status(503).json({
+      error: 'VNC proxy unavailable. Run: npm install ws',
+    });
+  }
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type);
@@ -808,41 +821,51 @@ function createServer() {
 }
 
 const server = createServer();
+if (!server) {
+  console.error('Failed to create HTTP(S) server');
+  process.exit(1);
+}
 
-// WebSocket proxy for noVNC: backend connects to Proxmox with ticket, streams to browser
-const wss = new WebSocket.Server({ server, path: '/api/proxmox/vnc-ws' });
-wss.on('connection', (clientWs, req) => {
-  const url = req.url || '';
-  const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
-  const params = new URLSearchParams(query);
-  const node = params.get('node');
-  const vmid = params.get('vmid');
-  const type = params.get('type') || 'qemu';
-  if (!node || !vmid) {
-    clientWs.close(1008, 'Missing node or vmid');
-    return;
-  }
-  proxmox.getVNCWebSocketTicket(node, vmid, type)
-    .then(({ ticket, port }) => {
-      const proxmoxUrl = proxmox.getProxmoxVncWebSocketUrl(node, vmid, type, ticket, port);
-      const proxWs = new WebSocket(proxmoxUrl, { rejectUnauthorized: false });
-      proxWs.binaryType = 'arraybuffer';
-      clientWs.binaryType = 'arraybuffer';
-      proxWs.on('open', () => {
-        proxWs.on('message', (data) => { if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data); });
-        proxWs.on('close', () => clientWs.close());
-        proxWs.on('error', (err) => { console.error('Proxmox VNC WebSocket error:', err.message); clientWs.close(); });
-      });
-      clientWs.on('message', (data) => { if (proxWs.readyState === WebSocket.OPEN) proxWs.send(data); });
-      clientWs.on('close', () => proxWs.close());
-      clientWs.on('error', () => proxWs.close());
-      proxWs.on('error', (err) => { console.error('Proxmox VNC WebSocket error:', err.message); });
-    })
-    .catch((err) => {
-      console.error('VNC proxy ticket error:', err.message);
-      clientWs.close(1011, err.message || 'Failed to get VNC ticket');
+// WebSocket proxy for noVNC (optional: requires "ws" package)
+if (WebSocket) {
+  try {
+    const wss = new WebSocket.Server({ server, path: '/api/proxmox/vnc-ws' });
+    wss.on('connection', (clientWs, req) => {
+      const url = req.url || '';
+      const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+      const params = new URLSearchParams(query);
+      const node = params.get('node');
+      const vmid = params.get('vmid');
+      const type = params.get('type') || 'qemu';
+      if (!node || !vmid) {
+        clientWs.close(1008, 'Missing node or vmid');
+        return;
+      }
+      proxmox.getVNCWebSocketTicket(node, vmid, type)
+        .then(({ ticket, port }) => {
+          const proxmoxUrl = proxmox.getProxmoxVncWebSocketUrl(node, vmid, type, ticket, port);
+          const proxWs = new WebSocket(proxmoxUrl, { rejectUnauthorized: false });
+          proxWs.binaryType = 'arraybuffer';
+          clientWs.binaryType = 'arraybuffer';
+          proxWs.on('open', () => {
+            proxWs.on('message', (data) => { if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data); });
+            proxWs.on('close', () => clientWs.close());
+            proxWs.on('error', (err) => { console.error('Proxmox VNC WebSocket error:', err.message); clientWs.close(); });
+          });
+          clientWs.on('message', (data) => { if (proxWs.readyState === WebSocket.OPEN) proxWs.send(data); });
+          clientWs.on('close', () => proxWs.close());
+          clientWs.on('error', () => proxWs.close());
+          proxWs.on('error', (err) => { console.error('Proxmox VNC WebSocket error:', err.message); });
+        })
+        .catch((err) => {
+          console.error('VNC proxy ticket error:', err.message);
+          clientWs.close(1011, err.message || 'Failed to get VNC ticket');
+        });
     });
-});
+  } catch (err) {
+    console.warn('WebSocket server setup failed:', err.message);
+  }
+}
 
 const onListen = () => {
   console.log(`Watchtower Server running on port ${PORT} (${SSL_CERT_PATH ? 'HTTPS' : 'HTTP'})`);
