@@ -276,7 +276,7 @@ const Proxmox = () => {
             <TableCell>Memory</TableCell>
             <TableCell>Uptime</TableCell>
             <TableCell>IP</TableCell>
-            <TableCell align="right">Actions</TableCell>
+            <TableCell align="center">Actions</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -323,7 +323,7 @@ const Proxmox = () => {
                   </Box>
                 )}
               </TableCell>
-              <TableCell align="right">
+              <TableCell align="center">
                 <Tooltip title="Start">
                   <IconButton
                     size="small"
