@@ -739,7 +739,53 @@ app.put('/api/proxmox/vms/:node/:vmid/pool', async (req, res) => {
   }
 });
 
-// /vnc-viewer is handled by the frontend SPA (React route); in-app console iframe loads it.
+// In-app VNC viewer: standalone HTML loaded in iframe; noVNC from CDN (avoids bundling in frontend).
+const VNC_VIEWER_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>VNC Console</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #1a1a1a; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
+    #status { padding: 8px 12px; background: #2d2d2d; color: #ccc; font-size: 13px; }
+    #status.error { color: #f44; }
+    #screen { flex: 1; min-height: 0; width: 100%; }
+  </style>
+</head>
+<body>
+  <div id="status">Connecting…</div>
+  <div id="screen"></div>
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    const node = params.get('node');
+    const vmid = params.get('vmid');
+    const type = params.get('type') || 'qemu';
+    const statusEl = document.getElementById('status');
+    const screenEl = document.getElementById('screen');
+    const setStatus = (msg, isError) => { statusEl.textContent = msg; statusEl.className = isError ? 'error' : ''; };
+    if (!node || !vmid) { setStatus('Missing node or vmid', true); throw 0; }
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = proto + '//' + location.host + '/api/proxmox/vnc-ws?node=' + encodeURIComponent(node) + '&vmid=' + encodeURIComponent(vmid) + '&type=' + encodeURIComponent(type);
+    try {
+      const mod = await import('https://esm.run/@novnc/novnc@1.4.0');
+      const RFB = mod.default || mod.RFB || mod;
+      const rfb = new RFB(screenEl, wsUrl);
+      rfb.scaleViewport = true;
+      rfb.resizeSession = true;
+      rfb.addEventListener('connect', () => setStatus('Connected'));
+      rfb.addEventListener('disconnect', (e) => setStatus(e.detail?.clean ? 'Disconnected' : 'Connection closed', !e.detail?.clean));
+    } catch (e) {
+      setStatus('Error: ' + (e?.message || e), true);
+    }
+  </script>
+</body>
+</html>`;
+
+app.get('/vnc-viewer', (req, res) => {
+  res.setHeader('Content-Type', 'text/html');
+  res.send(VNC_VIEWER_HTML);
+});
 
 // Serve frontend build in production (single process: API + static UI)
 const frontendDist = path.resolve(__dirname, '..', 'frontend', 'dist');
