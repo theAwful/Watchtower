@@ -1107,3 +1107,72 @@ export function getProxmoxVncWebSocketUrl(node, vmid, type, ticket, port) {
   const search = `port=${encodeURIComponent(port)}&vncticket=${encodeURIComponent(ticket)}`;
   return `wss://${PROXMOX_HOST}:${PROXMOX_PORT}${path}?${search}`;
 }
+
+// --- Console session flow (browser → app → Proxmox) ---
+// PVE login ticket (PVEAuthCookie) from /access/ticket; VNC ticket from vncproxy. Do not mix.
+
+const AUTH_CACHE_MS = 60 * 60 * 1000; // 1 hour
+let proxmoxAuthCache = null;
+
+/** Get PVE auth (ticket + CSRF), cached and refreshed. Required for vncproxy. */
+export async function getProxmoxAuth() {
+  if (proxmoxAuthCache && (Date.now() - proxmoxAuthCache.createdAt < AUTH_CACHE_MS)) {
+    return proxmoxAuthCache;
+  }
+  const sess = await getPVETicket();
+  proxmoxAuthCache = {
+    ticket: sess.ticket,
+    csrf: sess.csrfToken,
+    createdAt: Date.now(),
+  };
+  return proxmoxAuthCache;
+}
+
+/** Call vncproxy with PVEAuthCookie + CSRF, body websocket=true. Returns { port, ticket } (VNC ticket). */
+export function createVncProxySession(auth, node, vmid, type = 'qemu') {
+  const path = `/api2/json/nodes/${encodeURIComponent(node)}/${encodeURIComponent(type)}/${encodeURIComponent(vmid)}/vncproxy`;
+  const body = toFormUrlEncoded({ websocket: 1 });
+  return new Promise((resolve, reject) => {
+    const reqOptions = {
+      hostname: PROXMOX_HOST,
+      port: PROXMOX_PORT,
+      path,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Content-Length': Buffer.byteLength(body, 'utf8'),
+        'Cookie': `PVEAuthCookie=${auth.ticket}`,
+        'CSRFPreventionToken': auth.csrf,
+      },
+      rejectUnauthorized: false,
+    };
+    const req = https.request(reqOptions, (res) => {
+      const chunks = [];
+      res.setEncoding('utf8');
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const text = chunks.join('').trim();
+          if (res.statusCode !== 200) {
+            reject(new Error(`vncproxy failed: ${res.statusCode} ${text}`));
+            return;
+          }
+          const parsed = JSON.parse(text);
+          const data = parsed?.data;
+          const port = data?.port != null ? data.port : 5900;
+          const ticket = data?.ticket;
+          if (!ticket) {
+            reject(new Error('vncproxy response missing VNC ticket'));
+            return;
+          }
+          resolve({ port, ticket });
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}

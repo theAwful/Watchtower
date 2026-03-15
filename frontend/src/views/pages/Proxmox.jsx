@@ -210,17 +210,23 @@ const Proxmox = () => {
 
   const handleVNC = async (vm) => {
     try {
-      const response = await api.get(`/api/proxmox/vms/${vm.node}/${vm.vmid}/vnc?type=${vmType(vm)}`);
-      const url = response.data.viewerUrl || response.data.url;
-      if (url) {
-        setVncViewerUrl(url);
+      const response = await api.post('/api/console/session', {
+        node: vm.node,
+        vmid: vm.vmid,
+        type: vmType(vm),
+      });
+      const { wsPath } = response.data;
+      if (wsPath) {
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        const host = window.location.host;
+        setVncViewerUrl(`${protocol}//${host}/vnc-viewer?wsPath=${encodeURIComponent(wsPath)}`);
         setVncConsoleOpen(true);
-        setSnackbar({ open: true, message: 'Opening console…', severity: 'success' });
+        setSnackbar({ open: true, message: 'Opening console… Connect within a few seconds.', severity: 'success' });
       } else {
-        setSnackbar({ open: true, message: 'No console URL returned', severity: 'warning' });
+        setSnackbar({ open: true, message: 'No console path returned', severity: 'warning' });
       }
     } catch (err) {
-      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to get VNC console', severity: 'error' });
+      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to create console session', severity: 'error' });
     }
   };
 
