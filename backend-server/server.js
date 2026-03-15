@@ -769,8 +769,24 @@ const VNC_VIEWER_HTML = `<!DOCTYPE html>
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = proto + '//' + location.host + '/api/proxmox/vnc-ws?node=' + encodeURIComponent(node) + '&vmid=' + encodeURIComponent(vmid) + '&type=' + encodeURIComponent(type);
     try {
-      const mod = await import('https://esm.run/@novnc/novnc@1.4.0');
-      const RFB = mod.default || mod.RFB || mod;
+      let RFB;
+      const findRFB = (m) => {
+        if (!m) return null;
+        if (typeof m === 'function' && m.prototype) return m;
+        if (typeof m.default === 'function' && m.default.prototype) return m.default;
+        if (typeof m.RFB === 'function' && m.RFB.prototype) return m.RFB;
+        if (m.default && typeof m.default.default === 'function') return m.default.default;
+        return null;
+      };
+      for (const url of [
+        'https://cdn.skypack.dev/@novnc/novnc@1.4.0',
+        'https://esm.run/@novnc/novnc@1.4.0'
+      ]) {
+        const mod = await import(url);
+        RFB = findRFB(mod) || findRFB(mod?.default);
+        if (RFB) break;
+      }
+      if (typeof RFB !== 'function') throw new Error('RFB not found');
       const rfb = new RFB(screenEl, wsUrl);
       rfb.scaleViewport = true;
       rfb.resizeSession = true;
