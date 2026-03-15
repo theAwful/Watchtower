@@ -618,7 +618,27 @@ app.post('/api/proxmox/vms/:node/:vmid/restart', async (req, res) => {
   }
 });
 
-// Get VNC console URL (opens Proxmox noVNC; user must be logged into Proxmox in browser)
+// Set Proxmox session cookie (same-origin only). After Watchtower login, redirect here to set PVEAuthCookie so noVNC works when Proxmox is reverse-proxied under the same domain.
+app.get('/api/proxmox/set-session', async (req, res) => {
+  const redirectTo = (req.query.redirect && typeof req.query.redirect === 'string') ? req.query.redirect : '/';
+  try {
+    const { ticket } = await proxmox.getPVETicket();
+    const isSecure = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https';
+    res.cookie('PVEAuthCookie', ticket, {
+      path: '/',
+      maxAge: 2 * 60 * 60,
+      httpOnly: true,
+      secure: isSecure,
+      sameSite: 'lax',
+    });
+    res.redirect(302, redirectTo.startsWith('/') ? redirectTo : '/');
+  } catch (err) {
+    console.error('Proxmox set-session failed:', err.message);
+    res.redirect(302, redirectTo.startsWith('/') ? redirectTo : '/');
+  }
+});
+
+// Get VNC console URL (opens Proxmox noVNC; when same-origin + set-session used, cookie is sent)
 app.get('/api/proxmox/vms/:node/:vmid/vnc', async (req, res) => {
   try {
     const { node, vmid } = req.params;

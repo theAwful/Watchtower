@@ -21,7 +21,9 @@ const Login = ({ onLogin }) => {
       const { data } = await api.post('/api/auth/login', { username, password });
       if (data?.user) {
         onLogin?.(data.user);
-        navigate(from, { replace: true });
+        const redirectPath = from || '/';
+        window.location.href = `/api/proxmox/set-session?redirect=${encodeURIComponent(redirectPath)}`;
+        return;
       }
     } catch (err) {
       setError('Incorrect username or password');
