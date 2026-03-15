@@ -38,6 +38,7 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
+    path: '/',
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production' && process.env.HTTPS === '1',
     sameSite: 'lax',
@@ -45,11 +46,12 @@ app.use(session({
   },
 }));
 
-// Require session for /api except login and status
+// Require session for /api except auth and health (path only, no query)
 app.use('/api', (req, res, next) => {
-  if (req.originalUrl === '/api/auth/login' && req.method === 'POST') return next();
-  if (req.originalUrl === '/api/auth/status' && req.method === 'GET') return next();
-  if (req.originalUrl === '/api/health' && req.method === 'GET') return next();
+  const path = (req.originalUrl || req.url || '').split('?')[0];
+  if (path === '/api/auth/login' && req.method === 'POST') return next();
+  if (path === '/api/auth/status' && req.method === 'GET') return next();
+  if (path === '/api/health' && req.method === 'GET') return next();
   if (!req.session || !req.session.user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -299,7 +301,11 @@ app.post('/api/auth/login', (req, res) => {
   }
   if (String(username) === AUTH_USER && String(password) === AUTH_PASSWORD) {
     req.session.user = { username: AUTH_USER };
-    return res.json({ user: req.session.user });
+    req.session.save((err) => {
+      if (err) return res.status(500).json({ error: 'Session error' });
+      res.json({ user: req.session.user });
+    });
+    return;
   }
   res.status(401).json({ error: 'Invalid username or password' });
 });
