@@ -787,11 +787,17 @@ const VNC_VIEWER_HTML = `<!DOCTYPE html>
         if (RFB) break;
       }
       if (typeof RFB !== 'function') throw new Error('RFB not found');
-      const rfb = new RFB(screenEl, wsUrl);
+      var ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+      ws.onclose = (e) => {
+        if (e.code !== 1000 && e.code !== 1005) setStatus('Connection closed: ' + (e.reason || 'code ' + e.code), true);
+      };
+      ws.onerror = () => setStatus('WebSocket error. Check backend logs for [VNC] and that VM is running.', true);
+      const rfb = new RFB(screenEl, ws);
       rfb.scaleViewport = true;
       rfb.resizeSession = true;
       rfb.addEventListener('connect', () => setStatus('Connected'));
-      rfb.addEventListener('disconnect', (e) => setStatus(e.detail?.clean ? 'Disconnected' : 'Connection closed', !e.detail?.clean));
+      rfb.addEventListener('disconnect', (e) => { if (e.detail?.clean) setStatus('Disconnected'); });
     } catch (e) {
       setStatus('Error: ' + (e?.message || e), true);
     }
@@ -888,14 +894,11 @@ if (WebSocket) {
           const proxWs = new WebSocket(proxUrl, opts);
           proxWs.binaryType = 'arraybuffer';
           clientWs.binaryType = 'arraybuffer';
-          proxWs.on('open', () => {
-            console.log('[VNC] Proxmox tunnel up:', node, vmid);
-            proxWs.on('message', (data) => { if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data); });
-            proxWs.on('close', () => clientWs.close());
-            proxWs.on('error', (err) => { console.error('[VNC] Proxmox ws error:', err.message); clientWs.close(); });
-          });
+          proxWs.on('message', (data) => { if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data); });
+          proxWs.on('close', () => clientWs.close());
+          proxWs.on('open', () => console.log('[VNC] Proxmox tunnel up:', node, vmid));
           proxWs.on('error', (err) => {
-            console.error('[VNC] Proxmox connect failed:', err.message);
+            console.error('[VNC] Proxmox ws:', err.message);
             clientWs.close(1011, 'Backend could not connect to Proxmox');
           });
           clientWs.on('message', (data) => { if (proxWs.readyState === WebSocket.OPEN) proxWs.send(data); });
