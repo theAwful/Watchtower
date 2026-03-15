@@ -196,12 +196,11 @@ export async function getPVETicket() {
   if (!PROXMOX_PASSWORD) {
     throw new Error('PROXMOX_PASSWORD is required for Proxmox session');
   }
+  // Proxmox wiki: POST username and password only; username is user@realm. Use URL encoding for special chars in password.
   const ticketUser = `${PROXMOX_CONSOLE_USER}@${PROXMOX_CONSOLE_REALM}`;
-  const body = toFormUrlEncoded({
-    username: ticketUser,
-    password: PROXMOX_PASSWORD,
-    realm: PROXMOX_CONSOLE_REALM,
-  });
+  const body =
+    'username=' + encodeURIComponent(ticketUser) +
+    '&password=' + encodeURIComponent(PROXMOX_PASSWORD);
   return new Promise((resolve, reject) => {
     const reqOptions = {
       hostname: PROXMOX_HOST,
