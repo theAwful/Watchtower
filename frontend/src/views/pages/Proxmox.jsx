@@ -59,6 +59,8 @@ const Proxmox = () => {
   });
   const [vmTemplates, setVmTemplates] = useState([]);
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [vncConsoleOpen, setVncConsoleOpen] = useState(false);
+  const [vncViewerUrl, setVncViewerUrl] = useState(null);
 
   // Format bytes to human readable
   const formatBytes = (bytes) => {
@@ -209,9 +211,13 @@ const Proxmox = () => {
   const handleVNC = async (vm) => {
     try {
       const response = await api.get(`/api/proxmox/vms/${vm.node}/${vm.vmid}/vnc?type=${vmType(vm)}`);
-      if (response.data.url) {
-        window.open(response.data.url, '_blank');
-        setSnackbar({ open: true, message: 'Opening VNC console...', severity: 'success' });
+      const url = response.data.viewerUrl || response.data.url;
+      if (url) {
+        setVncViewerUrl(url);
+        setVncConsoleOpen(true);
+        setSnackbar({ open: true, message: 'Opening console…', severity: 'success' });
+      } else {
+        setSnackbar({ open: true, message: 'No console URL returned', severity: 'warning' });
       }
     } catch (err) {
       setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to get VNC console', severity: 'error' });
@@ -542,6 +548,26 @@ const Proxmox = () => {
             Delete
           </Button>
         </DialogActions>
+      </Dialog>
+
+      {/* VNC Console (in-app iframe) */}
+      <Dialog
+        open={vncConsoleOpen}
+        onClose={() => { setVncConsoleOpen(false); setVncViewerUrl(null); }}
+        fullScreen
+        PaperProps={{ sx: { bgcolor: '#1a1a1a' } }}
+      >
+        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1 }}>
+          <Typography variant="h6">Console</Typography>
+          <Button variant="outlined" size="small" onClick={() => { setVncConsoleOpen(false); setVncViewerUrl(null); }}>
+            Close
+          </Button>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {vncViewerUrl && (
+            <Box component="iframe" src={vncViewerUrl} sx={{ flex: 1, width: '100%', border: 0, minHeight: 400 }} title="VNC Console" />
+          )}
+        </DialogContent>
       </Dialog>
 
       {/* Snackbar for notifications */}

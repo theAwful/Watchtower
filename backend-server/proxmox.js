@@ -1065,12 +1065,12 @@ export async function updateVMPool(vmid, type, poolid, node) {
   }
 }
 
-// Get VNC console URL: obtain vncticket from vncproxy, build noVNC URL with it.
-// Flow: 1) access/ticket gives PVEAuthCookie (set via set-session when same-origin). 2) nodes/{node}/qemu|lxc/{vmid}/vncproxy gives vncticket. 3) noVNC URL uses vncticket= (and port if needed).
-// API: POST /api2/json/nodes/{node}/qemu|lxc/{vmid}/vncproxy → { ticket: vncticket, port }
+// noVNC + Proxmox: vncproxy must be called with websocket=true; response gives port + ticket (vncticket).
+// For Option B (proxy through our backend), browser only talks to us; we connect to Proxmox vncwebsocket with vncticket + optional PVEAuthCookie.
+// API: POST .../vncproxy with body websocket=true → { ticket: PVEVNC:..., port }
 export async function getVNCConsole(node, vmid, type = 'qemu') {
   const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
-  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
+  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 'true' });
   const vncticket = result?.ticket;
   const port = result?.port != null ? result.port : 5900;
   const consoleType = type === 'qemu' ? 'kvm' : 'lxc';
@@ -1090,4 +1090,21 @@ export async function getVNCConsole(node, vmid, type = 'qemu') {
   }
   const vncUrl = `${base}/?${params.toString()}`;
   return { ticket: vncticket || '', port, url: vncUrl };
+}
+
+/** Get vncticket + port for WebSocket proxy. Proxmox forum: call vncproxy with websocket=true. */
+export async function getVNCWebSocketTicket(node, vmid, type = 'qemu') {
+  const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
+  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 'true' });
+  const ticket = result?.ticket;
+  const port = result?.port != null ? result.port : 5900;
+  if (!ticket) throw new Error('Proxmox vncproxy did not return a ticket');
+  return { ticket, port };
+}
+
+/** Build Proxmox vncwebsocket URL for backend-to-Proxmox connection. URL must include port and vncticket (short-lived; connect within ~10s). */
+export function getProxmoxVncWebSocketUrl(node, vmid, type, ticket, port) {
+  const path = `/api2/json/nodes/${node}/${type}/${vmid}/vncwebsocket`;
+  const search = `port=${encodeURIComponent(port)}&vncticket=${encodeURIComponent(ticket)}`;
+  return `wss://${PROXMOX_HOST}:${PROXMOX_PORT}${path}?${search}`;
 }

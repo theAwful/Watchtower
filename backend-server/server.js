@@ -10,7 +10,16 @@ import fs from 'fs';
 import https from 'https';
 import http from 'http';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import * as proxmox from './proxmox.js';
+
+const require = createRequire(import.meta.url);
+let WebSocket = null;
+try {
+  WebSocket = require('ws');
+} catch (e) {
+  console.warn('Optional "ws" not installed. In-app VNC console disabled. Run: npm install ws');
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -638,13 +647,16 @@ app.get('/api/proxmox/set-session', async (req, res) => {
   }
 });
 
-// Get VNC console URL (opens Proxmox noVNC; when same-origin + set-session used, cookie is sent)
+// Get VNC console: returns URL to open (external noVNC) and viewerUrl for in-app console (iframe)
 app.get('/api/proxmox/vms/:node/:vmid/vnc', async (req, res) => {
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type);
     const result = await proxmox.getVNCConsole(node, vmid, type);
-    res.json({ success: true, ...result });
+    const protocol = req.protocol || (req.get('x-forwarded-proto') || 'http');
+    const host = req.get('host') || `localhost:${PORT}`;
+    const viewerUrl = `${protocol}://${host}/vnc-viewer?node=${encodeURIComponent(node)}&vmid=${encodeURIComponent(vmid)}&type=${encodeURIComponent(type)}`;
+    res.json({ success: true, ...result, viewerUrl });
   } catch (error) {
     console.error('Error getting VNC console:', error);
     res.status(500).json({
@@ -727,6 +739,8 @@ app.put('/api/proxmox/vms/:node/:vmid/pool', async (req, res) => {
   }
 });
 
+// /vnc-viewer is handled by the frontend SPA (React route); in-app console iframe loads it.
+
 // Serve frontend build in production (single process: API + static UI)
 const frontendDist = path.resolve(__dirname, '..', 'frontend', 'dist');
 const indexHtml = path.join(frontendDist, 'index.html');
@@ -756,6 +770,71 @@ if (frontendExists) {
 const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
 const SSL_KEY_PATH = process.env.SSL_KEY_PATH;
 
+function createServer() {
+  if (SSL_CERT_PATH && SSL_KEY_PATH) {
+    try {
+      const key = fs.readFileSync(SSL_KEY_PATH, 'utf8');
+      const cert = fs.readFileSync(SSL_CERT_PATH, 'utf8');
+      return https.createServer({ key, cert }, app);
+    } catch (err) {
+      console.error('Failed to load SSL cert/key:', err.message);
+      console.error('Check SSL_CERT_PATH and SSL_KEY_PATH in .env. Falling back to HTTP.');
+    }
+  }
+  return http.createServer(app);
+}
+
+const server = createServer();
+if (!server) process.exit(1);
+
+if (WebSocket) {
+  try {
+    const wss = new WebSocket.Server({ server, path: '/api/proxmox/vnc-ws' });
+    wss.on('connection', (clientWs, req) => {
+      const url = req.url || '';
+      const query = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+      const params = new URLSearchParams(query);
+      const node = params.get('node');
+      const vmid = params.get('vmid');
+      const type = params.get('type') || 'qemu';
+      if (!node || !vmid) {
+        clientWs.close(1008, 'Missing node or vmid');
+        return;
+      }
+      // Option B: proxy through our backend. Get vncticket (websocket=true), then connect to Proxmox vncwebsocket with vncticket + optional PVEAuthCookie.
+      // Connect immediately; Proxmox vncproxy ticket has short lifetime (~10s).
+      proxmox.getVNCWebSocketTicket(node, vmid, type)
+        .then(async ({ ticket, port }) => {
+          const proxUrl = proxmox.getProxmoxVncWebSocketUrl(node, vmid, type, ticket, port);
+          let headers = {};
+          try {
+            const sess = await proxmox.getPVETicket();
+            if (sess?.ticket) headers.Cookie = `PVEAuthCookie=${sess.ticket}`;
+          } catch (_) { /* PROXMOX_PASSWORD not set or ticket failed; connect with vncticket only */ }
+          const opts = { rejectUnauthorized: false };
+          if (Object.keys(headers).length) opts.headers = headers;
+          const proxWs = new WebSocket(proxUrl, opts);
+          proxWs.binaryType = 'arraybuffer';
+          clientWs.binaryType = 'arraybuffer';
+          proxWs.on('open', () => {
+            proxWs.on('message', (data) => { if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data); });
+            proxWs.on('close', () => clientWs.close());
+            proxWs.on('error', (err) => { console.error('Proxmox VNC ws:', err.message); clientWs.close(); });
+          });
+          clientWs.on('message', (data) => { if (proxWs.readyState === WebSocket.OPEN) proxWs.send(data); });
+          clientWs.on('close', () => proxWs.close());
+          clientWs.on('error', () => proxWs.close());
+        })
+        .catch((err) => {
+          console.error('VNC proxy ticket:', err.message);
+          clientWs.close(1011, err.message || 'Failed to get VNC ticket');
+        });
+    });
+  } catch (err) {
+    console.warn('WebSocket server setup failed:', err.message);
+  }
+}
+
 const onListen = () => {
   console.log(`Watchtower Server running on port ${PORT} (${SSL_CERT_PATH ? 'HTTPS' : 'HTTP'})`);
   console.log(`OpenVPN Management Interface: ${OPENVPN_HOST}:${OPENVPN_PORT}`);
@@ -764,17 +843,5 @@ const onListen = () => {
   }
 };
 
-if (SSL_CERT_PATH && SSL_KEY_PATH) {
-  try {
-    const key = fs.readFileSync(SSL_KEY_PATH, 'utf8');
-    const cert = fs.readFileSync(SSL_CERT_PATH, 'utf8');
-    https.createServer({ key, cert }, app).listen(PORT, onListen);
-  } catch (err) {
-    console.error('Failed to load SSL cert/key:', err.message);
-    console.error('Check SSL_CERT_PATH and SSL_KEY_PATH in .env. Falling back to HTTP.');
-    http.createServer(app).listen(PORT, onListen);
-  }
-} else {
-  http.createServer(app).listen(PORT, onListen);
-}
+server.listen(PORT, onListen);
 

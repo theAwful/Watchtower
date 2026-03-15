@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { ThemeProvider, createTheme, CssBaseline, Box, CircularProgress } from '@mui/material';
 import Proxmox from './views/pages/Proxmox';
+import VncViewer from './views/pages/VncViewer';
 import AppLayout from './views/components/AppLayout';
 import Login from './views/pages/Login';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -197,6 +198,7 @@ function App() {
     }
     return (
       <Routes>
+        <Route path="/vnc-viewer" element={<VncViewer />} />
         <Route path="/" element={<AppLayout toggleTheme={toggleTheme} currentTheme={mode} />}>
           <Route index element={<Proxmox />} />
           <Route path="proxmox" element={<Proxmox />} />
