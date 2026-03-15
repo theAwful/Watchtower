@@ -269,34 +269,34 @@ const Proxmox = () => {
       <Table>
         <TableHead>
           <TableRow>
-            <TableCell>VMID</TableCell>
-            <TableCell>Name</TableCell>
-            <TableCell>Status</TableCell>
-            <TableCell>CPU</TableCell>
-            <TableCell>Memory</TableCell>
-            <TableCell>Uptime</TableCell>
-            <TableCell>IP</TableCell>
+            <TableCell align="center" sx={{ textAlign: 'center' }}>VMID</TableCell>
+            <TableCell align="center" sx={{ textAlign: 'center' }}>Name</TableCell>
+            <TableCell align="center" sx={{ textAlign: 'center' }}>Status</TableCell>
+            <TableCell align="center" sx={{ textAlign: 'center' }}>CPU</TableCell>
+            <TableCell align="center" sx={{ textAlign: 'center' }}>Memory</TableCell>
+            <TableCell align="center" sx={{ textAlign: 'center' }}>Uptime</TableCell>
+            <TableCell align="center" sx={{ textAlign: 'center' }}>IP</TableCell>
             <TableCell align="center" sx={{ textAlign: 'center' }}>Actions</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
           {vmList.map((vm) => (
             <TableRow key={`${vm.node}-${vm.vmid}`} hover>
-              <TableCell>{vm.vmid}</TableCell>
-              <TableCell>{vm.name || `VM-${vm.vmid}`}</TableCell>
-              <TableCell>
+              <TableCell align="center" sx={{ textAlign: 'center' }}>{vm.vmid}</TableCell>
+              <TableCell align="center" sx={{ textAlign: 'center' }}>{vm.name || `VM-${vm.vmid}`}</TableCell>
+              <TableCell align="center" sx={{ textAlign: 'center' }}>
                 <Chip
                   label={vm.status || 'unknown'}
                   color={vm.status === 'running' ? 'success' : vm.status === 'stopped' ? 'default' : 'warning'}
                   size="small"
                 />
               </TableCell>
-              <TableCell>{(vm.cpu * 100).toFixed(1)}%</TableCell>
-              <TableCell>
+              <TableCell align="center" sx={{ textAlign: 'center' }}>{(vm.cpu * 100).toFixed(1)}%</TableCell>
+              <TableCell align="center" sx={{ textAlign: 'center' }}>
                 {formatBytes(vm.mem || 0)} / {formatBytes(vm.maxmem || 0)}
               </TableCell>
-              <TableCell>{formatUptime(vm.uptime)}</TableCell>
-              <TableCell sx={{ fontFamily: 'inherit', fontSize: 'inherit' }}>
+              <TableCell align="center" sx={{ textAlign: 'center' }}>{formatUptime(vm.uptime)}</TableCell>
+              <TableCell align="center" sx={{ fontFamily: 'inherit', fontSize: 'inherit', textAlign: 'center' }}>
                 {vm.ip ? (
                   <Tooltip title="Click to copy">
                     <Box
