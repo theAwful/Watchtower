@@ -235,7 +235,7 @@ Delete a virtual machine or container.
 
 ### Get VNC Console URL
 
-Get a VNC console URL for accessing a VM's console.
+Get a VNC console URL for accessing a VM's console. The URL includes a ticket so the user can open the console without being logged into Proxmox in the browser, **if** `PROXMOX_PASSWORD` is set in the environment (same user as `PROXMOX_USER`).
 
 **Endpoint**: `GET /api/proxmox/vms/:node/:vmid/vnc`
 
@@ -247,8 +247,7 @@ Get a VNC console URL for accessing a VM's console.
 **Response**:
 ```json
 {
-  "success": true,
-  "url": "https://proxmox-host:8006/?console=kvm&novnc=1&vmid=100&node=proxmox-node1&resize=1&token=abc123"
+  "url": "https://proxmox-host:8006/?console=kvm&novnc=1&vmid=100&node=proxmox-node1&resize=1&vncticket=..."
 }
 ```
 
@@ -376,6 +375,7 @@ The backend requires the following environment variables:
 - `PROXMOX_REALM`: Authentication realm (default: pam)
 - `PROXMOX_TOKEN_ID`: API token ID
 - `PROXMOX_TOKEN_SECRET`: API token secret
+- `PROXMOX_PASSWORD`: (optional) Password for same user; required for noVNC when users are not logged into Proxmox in the browser
 
 ### Server
 - `PORT`: Backend server port (default: 8080)

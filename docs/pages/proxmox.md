@@ -60,6 +60,7 @@ Proxmox is configured via environment variables (see [README](../../README.md) a
 
 - `PROXMOX_HOST`, `PROXMOX_PORT`, `PROXMOX_USER`, `PROXMOX_REALM`
 - `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`
+- `PROXMOX_PASSWORD` (optional) – Password for the same user; **required for noVNC** when users are not logged into the Proxmox UI in their browser. The server uses it to obtain a console ticket.
 
 Create the token in Proxmox: **Datacenter → Permissions → API Tokens**. The token needs at least VM and node read, and VM power/clone/delete where you use those features.
 
@@ -68,4 +69,4 @@ Create the token in Proxmox: **Datacenter → Permissions → API Tokens**. The 
 - **VMs not loading** – Check backend logs and Proxmox connectivity. Ensure the API token has permissions (e.g. VM.Audit, VM.Allocate).
 - **Create VM fails** – Use a template (e.g. name starting with `tmpl-` or marked template in Proxmox). Keep VM names DNS-friendly.
 - **No guest IP** – Install and enable the QEMU guest agent in the VM; IP is read from the agent.
-- **noVNC not opening** – Ensure the VM is running and the browser allows pop-ups for the Watchtower origin.
+- **noVNC not opening / 401 No ticket** – Set `PROXMOX_PASSWORD` in `.env` (same user as `PROXMOX_USER`) so the server can obtain a console ticket without requiring a Proxmox login in the browser. Ensure the VM is running and the browser allows pop-ups.

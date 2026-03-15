@@ -1,17 +1,27 @@
 # Watchtower - Proxmox VM Management
 # Usage: copy .env.example to .env, set PROXMOX_* and optional SSL paths, then:
 #   docker compose up -d
+# Build: docker compose build
 # Access: https://<host-ip>:8080 (or http if SSL not configured)
 
 services:
   watchtower:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: watchtower:latest
     container_name: watchtower
     restart: unless-stopped
     ports:
       - "${PORT:-8080}:8080"
     env_file:
       - .env
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/api/health',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.exit(r.statusCode===200?0:1))}).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     # Optional: mount SSL certs for HTTPS (paths must match SSL_CERT_PATH / SSL_KEY_PATH in .env)
     # volumes:
     #   - /etc/letsencrypt/live/your-domain/fullchain.pem:/run/secrets/ssl_cert:ro
