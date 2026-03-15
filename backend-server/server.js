@@ -3,6 +3,9 @@ import express from 'express';
 import cors from 'cors';
 import net from 'net';
 import path from 'path';
+import fs from 'fs';
+import https from 'https';
+import http from 'http';
 import { fileURLToPath } from 'url';
 import * as proxmox from './proxmox.js';
 
@@ -624,11 +627,7 @@ app.put('/api/proxmox/vms/:node/:vmid/pool', async (req, res) => {
 // Serve frontend build in production (single process: API + static UI)
 const frontendDist = path.resolve(__dirname, '..', 'frontend', 'dist');
 const indexHtml = path.join(frontendDist, 'index.html');
-let frontendExists = false;
-try {
-  const fs = await import('fs');
-  frontendExists = fs.existsSync(frontendDist) && fs.existsSync(indexHtml);
-} catch (_) {}
+const frontendExists = fs.existsSync(frontendDist) && fs.existsSync(indexHtml);
 
 if (frontendExists) {
   app.use(express.static(frontendDist));
@@ -650,11 +649,29 @@ if (frontendExists) {
   console.warn('Frontend dist not found at', frontendDist, '- build with: cd frontend && npm run build');
 }
 
-app.listen(PORT, () => {
-  console.log(`Watchtower Server running on port ${PORT}`);
+// HTTPS: set SSL_CERT_PATH and SSL_KEY_PATH in .env to serve over https (e.g. IP:port)
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
+const SSL_KEY_PATH = process.env.SSL_KEY_PATH;
+
+const onListen = () => {
+  console.log(`Watchtower Server running on port ${PORT} (${SSL_CERT_PATH ? 'HTTPS' : 'HTTP'})`);
   console.log(`OpenVPN Management Interface: ${OPENVPN_HOST}:${OPENVPN_PORT}`);
   if (process.env.PROXMOX_HOST) {
     console.log(`Proxmox API: ${process.env.PROXMOX_HOST}:${process.env.PROXMOX_PORT || 8006}`);
   }
-});
+};
+
+if (SSL_CERT_PATH && SSL_KEY_PATH) {
+  try {
+    const key = fs.readFileSync(SSL_KEY_PATH, 'utf8');
+    const cert = fs.readFileSync(SSL_CERT_PATH, 'utf8');
+    https.createServer({ key, cert }, app).listen(PORT, onListen);
+  } catch (err) {
+    console.error('Failed to load SSL cert/key:', err.message);
+    console.error('Check SSL_CERT_PATH and SSL_KEY_PATH in .env. Falling back to HTTP.');
+    http.createServer(app).listen(PORT, onListen);
+  }
+} else {
+  http.createServer(app).listen(PORT, onListen);
+}
 

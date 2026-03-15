@@ -62,6 +62,15 @@ Required for Proxmox:
 
 Optional: `PORT` (default 8080), OpenVPN vars if you use Connected Devices.
 
+### HTTPS (optional)
+
+To serve over HTTPS (e.g. **`https://<server-ip>:8080`**), set in `backend-server/.env`:
+
+- `SSL_CERT_PATH` – path to the certificate file (e.g. `fullchain.pem` or `cert.pem`)
+- `SSL_KEY_PATH` – path to the private key file (e.g. `privkey.pem`)
+
+Use absolute paths. If both are set and the files exist, the server listens with HTTPS; otherwise it falls back to HTTP. For IP-only access you can use a self-signed certificate (browsers will show a warning you can bypass).
+
 ---
 
 ## 4. Run the app
