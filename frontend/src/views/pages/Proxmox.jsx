@@ -47,7 +47,7 @@ const Proxmox = () => {
   const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [statusFilter, setStatusFilter] = useState(STATUS_FILTER_ALL); // 'all' | 'running'
+  const [statusFilter, setStatusFilter] = useState(STATUS_FILTER_RUNNING); // default: running only
   const [searchQuery, setSearchQuery] = useState('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [vmToDelete, setVmToDelete] = useState(null);
@@ -294,10 +294,10 @@ const Proxmox = () => {
                 {formatBytes(vm.mem || 0)} / {formatBytes(vm.maxmem || 0)}
               </TableCell>
               <TableCell>{formatUptime(vm.uptime)}</TableCell>
-              <TableCell>
+              <TableCell sx={{ fontFamily: 'inherit', fontSize: 'inherit' }}>
                 {vm.ip ? (
                   <Tooltip title="Click to copy">
-                    <Typography
+                    <Box
                       component="span"
                       onClick={async () => {
                         const ok = await copyToClipboard(vm.ip);
@@ -313,12 +313,12 @@ const Proxmox = () => {
                       }}
                     >
                       {vm.ip}
-                    </Typography>
+                    </Box>
                   </Tooltip>
                 ) : (
-                  <Typography component="span" color="text.secondary">
+                  <Box component="span" sx={{ color: 'text.secondary' }}>
                     —
-                  </Typography>
+                  </Box>
                 )}
               </TableCell>
               <TableCell align="right">
@@ -453,29 +453,6 @@ const Proxmox = () => {
               </Button>
             </Box>
           </Box>
-
-          {/* Nodes summary */}
-          {nodes.length > 0 && (
-            <Paper sx={{ p: 2, mb: 3 }}>
-              <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
-                Nodes ({nodes.length})
-              </Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                {nodes.map((n) => {
-                  const count = vms.filter((v) => v.node === n.node).length;
-                  return (
-                    <Chip
-                      key={n.node}
-                      label={`${n.node} ${n.status === 'online' ? '●' : '○'} (${count} VMs)`}
-                      color={n.status === 'online' ? 'primary' : 'default'}
-                      variant="outlined"
-                      size="small"
-                    />
-                  );
-                })}
-              </Box>
-            </Paper>
-          )}
 
           {/* VMs grouped by node */}
           {nodeNames.map((nodeName) => renderVMTable(byNode[nodeName], nodeName))}
