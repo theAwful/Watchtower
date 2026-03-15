@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { ThemeProvider, createTheme, CssBaseline, Box, CircularProgress } from '@mui/material';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
 import Proxmox from './views/pages/Proxmox';
 import AppLayout from './views/components/AppLayout';
-import Login from './views/pages/Login';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Cookies from 'js-cookie';
 
 // Create theme options
@@ -155,40 +153,6 @@ const getThemeOptions = (mode) => ({
 // Theme cookie name
 const THEME_COOKIE_NAME = 'watchtower-theme-mode';
 
-function AppRoutes({ toggleTheme, mode }) {
-  const { user, loading, login } = useAuth();
-  const location = useLocation();
-
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
-
-  if (!user) {
-    if (location.pathname === '/login') {
-      return <Login onLogin={login} />;
-    }
-    return <Navigate to="/login" state={{ from: location }} replace />;
-  }
-
-  if (location.pathname === '/login') {
-    return <Navigate to="/" replace />;
-  }
-
-  return (
-    <Routes>
-      <Route path="/" element={<AppLayout toggleTheme={toggleTheme} currentTheme={mode} />}>
-        <Route index element={<Proxmox />} />
-        <Route path="proxmox" element={<Proxmox />} />
-      </Route>
-      <Route path="/login" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
-}
-
 function App() {
   // Get theme from cookies or default to dark mode
   let savedTheme;
@@ -219,9 +183,12 @@ function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Router>
-        <AuthProvider>
-          <AppRoutes toggleTheme={toggleTheme} mode={mode} />
-        </AuthProvider>
+        <Routes>
+          <Route path="/" element={<AppLayout toggleTheme={toggleTheme} currentTheme={mode} />}>
+            <Route index element={<Proxmox />} />
+            <Route path="proxmox" element={<Proxmox />} />
+          </Route>
+        </Routes>
       </Router>
     </ThemeProvider>
   );

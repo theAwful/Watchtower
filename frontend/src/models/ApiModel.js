@@ -8,7 +8,6 @@ const api = axios.create({
     'Content-Type': 'application/json'
   },
   timeout: 45000, // 45 seconds
-  withCredentials: true, // send session cookie
 });
 
 // Add a request interceptor
@@ -27,12 +26,6 @@ api.interceptors.response.use(
     return response;
   },
   error => {
-    if (error.response?.status === 401) {
-      const url = error.config?.url || '';
-      if (!url.includes('/auth/login') && !url.includes('/auth/status')) {
-        window.dispatchEvent(new CustomEvent('auth:logout'));
-      }
-    }
     if (error.response) {
       console.error('API Error Response:', error.response.data);
     } else if (error.request) {

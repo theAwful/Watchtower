@@ -20,14 +20,11 @@ import {
   LightMode as LightModeIcon,
   DarkMode as DarkModeIcon,
   Cloud as CloudIcon,
-  Logout as LogoutIcon,
 } from '@mui/icons-material';
-import { useAuth } from '../../contexts/AuthContext';
 
 const AppLayout = ({ toggleTheme, currentTheme }) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const location = useLocation();
-  const { user, logout } = useAuth();
 
   const toggleDrawer = (open) => () => {
     setDrawerOpen(open);
@@ -60,27 +57,15 @@ const AppLayout = ({ toggleTheme, currentTheme }) => {
           >
             Proxmox
           </Button>
-
-          {user && (
-            <Typography variant="body2" sx={{ mr: 2, opacity: 0.9 }}>
-              {user.username}
-            </Typography>
-          )}
           
           {/* Theme Toggle Button */}
           <Tooltip title={`Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} mode`}>
             <IconButton 
               color="inherit" 
               onClick={toggleTheme} 
-              sx={{ mr: 1 }}
+              sx={{ mr: 2 }}
             >
               {currentTheme === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
-            </IconButton>
-          </Tooltip>
-
-          <Tooltip title="Sign out">
-            <IconButton color="inherit" onClick={logout} aria-label="Sign out">
-              <LogoutIcon />
             </IconButton>
           </Tooltip>
         </Toolbar>
