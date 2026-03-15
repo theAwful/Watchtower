@@ -276,7 +276,7 @@ const Proxmox = () => {
             <TableCell>Memory</TableCell>
             <TableCell>Uptime</TableCell>
             <TableCell>IP</TableCell>
-            <TableCell align="center">Actions</TableCell>
+            <TableCell align="center" sx={{ textAlign: 'center' }}>Actions</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -323,7 +323,8 @@ const Proxmox = () => {
                   </Box>
                 )}
               </TableCell>
-              <TableCell align="center">
+              <TableCell align="center" sx={{ textAlign: 'center' }}>
+                <Box component="span" sx={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: 0 }}>
                 <Tooltip title="Start">
                   <IconButton
                     size="small"
@@ -376,6 +377,7 @@ const Proxmox = () => {
                     <DeleteIcon />
                   </IconButton>
                 </Tooltip>
+                </Box>
               </TableCell>
             </TableRow>
           ))}
