@@ -9,8 +9,11 @@ const PROXMOX_TOKEN_ID = process.env.PROXMOX_TOKEN_ID || '';
 const PROXMOX_TOKEN_SECRET = process.env.PROXMOX_TOKEN_SECRET || '';
 const PROXMOX_USER = process.env.PROXMOX_USER || 'root';
 const PROXMOX_REALM = process.env.PROXMOX_REALM || 'pam';
-/** Optional: for same-origin Proxmox session (set PVEAuthCookie when user logs into Watchtower). Only used when Proxmox is reverse-proxied under same domain. */
+/** Password for Proxmox /access/ticket (console flow). User must support password auth — API-token-only users get 401. */
 const PROXMOX_PASSWORD = process.env.PROXMOX_PASSWORD || '';
+/** Optional: use a different user for console ticket (e.g. root). If unset, uses PROXMOX_USER. Use when API token user has no password. */
+const PROXMOX_CONSOLE_USER = (process.env.PROXMOX_CONSOLE_USER || '').trim() || PROXMOX_USER;
+const PROXMOX_CONSOLE_REALM = (process.env.PROXMOX_CONSOLE_REALM || '').trim() || PROXMOX_REALM;
 /** Optional: public URL for Proxmox UI when reverse-proxied (e.g. https://watchtower.example.com/proxmox). noVNC links use this so the cookie is sent. */
 const PROXMOX_PUBLIC_URL = (process.env.PROXMOX_PUBLIC_URL || '').replace(/\/$/, '');
 
@@ -193,10 +196,11 @@ export async function getPVETicket() {
   if (!PROXMOX_PASSWORD) {
     throw new Error('PROXMOX_PASSWORD is required for Proxmox session');
   }
+  const ticketUser = `${PROXMOX_CONSOLE_USER}@${PROXMOX_CONSOLE_REALM}`;
   const body = toFormUrlEncoded({
-    username: `${PROXMOX_USER}@${PROXMOX_REALM}`,
+    username: ticketUser,
     password: PROXMOX_PASSWORD,
-    realm: PROXMOX_REALM,
+    realm: PROXMOX_CONSOLE_REALM,
   });
   return new Promise((resolve, reject) => {
     const reqOptions = {

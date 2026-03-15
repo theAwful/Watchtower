@@ -681,6 +681,7 @@ app.post('/api/console/session', async (req, res) => {
     if (err.message && err.message.includes('access/ticket')) {
       const dbg = proxmox.debugProxmoxPasswordRead?.();
       if (dbg) console.error('[Console] PROXMOX_PASSWORD check (never log full value):', dbg);
+      console.error('[Console] Ticket user sent:', process.env.PROXMOX_CONSOLE_USER ? `${process.env.PROXMOX_CONSOLE_USER}@${process.env.PROXMOX_CONSOLE_REALM || 'pam'}` : `${process.env.PROXMOX_USER}@${process.env.PROXMOX_REALM || 'pam'}`);
     }
     res.status(500).json({ error: err.message || 'Failed to create console session' });
   }
