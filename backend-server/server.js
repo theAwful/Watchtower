@@ -46,8 +46,11 @@ app.use(session({
   },
 }));
 
-// Require session for /api except auth and health
+// Require session for /api except auth and health (only when login is configured)
 app.use('/api', (req, res, next) => {
+  if (!AUTH_USER || !AUTH_PASSWORD) {
+    return next();
+  }
   const pathOnly = (req.originalUrl || req.url || '').split('?')[0];
   if (pathOnly === '/api/auth/login' && req.method === 'POST') return next();
   if (pathOnly === '/api/auth/status' && req.method === 'GET') return next();
