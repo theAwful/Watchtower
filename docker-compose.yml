@@ -1,0 +1,19 @@
+# Watchtower - Proxmox VM Management
+# Usage: copy .env.example to .env, set PROXMOX_* and optional SSL paths, then:
+#   docker compose up -d
+# Access: https://<host-ip>:8080 (or http if SSL not configured)
+
+services:
+  watchtower:
+    build: .
+    container_name: watchtower
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    env_file:
+      - .env
+    # Optional: mount SSL certs for HTTPS (paths must match SSL_CERT_PATH / SSL_KEY_PATH in .env)
+    # volumes:
+    #   - /etc/letsencrypt/live/your-domain/fullchain.pem:/run/secrets/ssl_cert:ro
+    #   - /etc/letsencrypt/live/your-domain/privkey.pem:/run/secrets/ssl_key:ro
+    # Then set in .env: SSL_CERT_PATH=/run/secrets/ssl_cert SSL_KEY_PATH=/run/secrets/ssl_key

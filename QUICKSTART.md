@@ -1,123 +1,64 @@
-# Quick Start Guide
+# Quick Start
 
-## Prerequisites
+Get Watchtower (Proxmox VM management) running in a few minutes.
 
-1. **OpenVPN Server** with management interface enabled
-2. **Node.js 18+** installed
-3. Access to OpenVPN management interface (typically port 7505)
+## Option A: Docker
 
-## Step 1: Enable OpenVPN Management Interface
+1. **Clone and configure**
 
-Add this line to your OpenVPN server configuration file:
+   ```bash
+   git clone <repo-url> watchtower && cd watchtower
+   cp .env.example .env
+   ```
 
-```
-management localhost 7505
-```
+2. **Edit `.env`** – set your Proxmox API token:
 
-Or if you want password protection:
+   - `PROXMOX_HOST` – Proxmox IP or hostname  
+   - `PROXMOX_USER` – e.g. `root`  
+   - `PROXMOX_REALM` – `pam`  
+   - `PROXMOX_TOKEN_ID` and `PROXMOX_TOKEN_SECRET` – from Proxmox: **Datacenter → Permissions → API Tokens → Add**
 
-```
-management localhost 7505 /path/to/password-file
-```
+3. **Run**
 
-Then restart your OpenVPN server.
+   ```bash
+   docker compose up -d
+   ```
 
-## Step 2: Start the Backend Server
+4. **Open** `http://<this-machine-ip>:8080`
 
-```bash
-cd backend-server
+## Option B: Local (Node)
 
-# Install dependencies
-npm install
+1. **Backend**
 
-# Start the server
-npm start
-```
+   ```bash
+   cd backend-server
+   npm ci
+   cp ../.env.example .env
+   # Edit .env with PROXMOX_* (see above)
+   npm start
+   ```
 
-The server will start on port 8080 by default. You can change this by setting the `PORT` environment variable.
+2. **Frontend (separate terminal)**
 
-## Step 3: Start the Frontend
+   ```bash
+   cd frontend
+   npm ci
+   npm run dev
+   ```
 
-In a new terminal:
+3. **Open** `http://localhost:5173` (Vite). The UI talks to the backend on port 8080.
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+For a single URL in production, build the frontend and run only the backend: see [README.md](README.md#running-without-docker).
 
-The frontend will be available at `http://localhost:5173` (or the port Vite assigns).
+## Proxmox API token
 
-## Configuration
-
-### Backend Environment Variables
-
-Create a `.env` file in `backend-server/`:
-
-```env
-# OpenVPN Configuration
-OPENVPN_HOST=localhost
-OPENVPN_PORT=7505
-OPENVPN_PASSWORD=
-
-# Proxmox Configuration (optional - for VM management)
-PROXMOX_HOST=your-proxmox-host
-PROXMOX_PORT=8006
-PROXMOX_USER=root
-PROXMOX_REALM=pam
-PROXMOX_TOKEN_ID=your-token-id
-PROXMOX_TOKEN_SECRET=your-token-secret
-
-# Server Configuration
-PORT=8080
-```
-
-**Required:**
-- `OPENVPN_HOST`: Hostname where OpenVPN management interface is running (default: localhost)
-- `OPENVPN_PORT`: Port for OpenVPN management interface (default: 7505)
-- `OPENVPN_PASSWORD`: Password if management interface requires authentication (leave empty if not needed)
-- `PORT`: Backend server port (default: 8080)
-
-**Optional (for Proxmox features):**
-- `PROXMOX_HOST`: Proxmox server hostname
-- `PROXMOX_PORT`: Proxmox API port (default: 8006)
-- `PROXMOX_USER`: Proxmox username
-- `PROXMOX_REALM`: Authentication realm (default: pam)
-- `PROXMOX_TOKEN_ID`: API token ID
-- `PROXMOX_TOKEN_SECRET`: API token secret
+1. Log into the Proxmox web UI.  
+2. Go to **Datacenter → Permissions → API Tokens**.  
+3. **Add**: choose user (e.g. `root@pam`), token ID, and generate a secret.  
+4. Put the same user in `PROXMOX_USER`, token ID in `PROXMOX_TOKEN_ID`, secret in `PROXMOX_TOKEN_SECRET`.
 
 ## Troubleshooting
 
-### "Cannot connect to OpenVPN management interface"
-
-1. Verify OpenVPN is running: `systemctl status openvpn` (Linux) or check your OpenVPN service
-2. Check management interface is enabled in OpenVPN config
-3. Test connection manually: `telnet localhost 7505` (should connect)
-4. Check firewall allows connections to port 7505
-
-### "No devices showing"
-
-1. Make sure devices are actually connected to OpenVPN
-2. Check backend server logs for errors
-3. Verify OpenVPN management interface responds: `echo "status 2" | nc localhost 7505`
-
-### Backend server errors
-
-Check the console output for detailed error messages. Common issues:
-- OpenVPN management interface not accessible
-- Wrong port number
-- Password required but not provided
-- Firewall blocking connection
-
-## Production Deployment
-
-For production, you'll want to:
-
-1. Build the frontend: `cd frontend && npm run build`
-2. Serve the built files with a web server (nginx, Apache, etc.)
-3. Run the backend server as a service (systemd, PM2, etc.)
-4. Set up proper firewall rules
-5. Use HTTPS for the frontend
-
-See the main README.md for more details.
-
+- **VMs not loading** – Check `PROXMOX_HOST` and that the server can reach Proxmox (e.g. `curl -k https://<PROXMOX_HOST>:8006/api2/json/version`). Confirm the token has at least **VM.Audit**, **VM.Config.Network**, **Datastore.AllocateSpace** (and **VM.Clone** for Create VM).
+- **Create VM fails** – Ensure the source is a template (e.g. `tmpl-Kali`). VM names must be DNS-friendly (letters, numbers, hyphens; no spaces).
+- **HTTPS** – See [DEPLOY.md](DEPLOY.md) for SSL with Docker or systemd.

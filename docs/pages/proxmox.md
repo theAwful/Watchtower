@@ -1,133 +1,71 @@
 # Proxmox VM Management
 
-The Proxmox page provides comprehensive virtual machine and container management through integration with the Proxmox Virtual Environment API.
+The main Watchtower page: view and manage Proxmox VMs and containers from a single UI.
 
 ## Overview
 
-This page allows you to view, deploy, manage, and access all virtual machines and containers in your Proxmox environment. VMs are organized by storage pools for better organization.
+- **VM list** – All QEMU and LXC VMs from every node, grouped by node.
+- **Filters** – “Running only” (default) or “All”; search by name, VMID, node, or IP.
+- **Create VM from template** – Clone a template (e.g. `tmpl-Kali`, `tmpl-Win11`) with auto VMID; new VMs are created on `pve-node0`.
+- **Power actions** – Start, Restart, Stop per VM.
+- **noVNC** – Open a web console in a new tab (VM must be running).
+- **IP** – Guest IP when QEMU agent is available; click to copy.
 
-## Features
+## VM table
 
-### VM Display
+Each VM row shows:
 
-VMs are displayed in separate tables, grouped by their assigned storage pool:
-- Each pool has its own table section
-- Unassigned VMs are shown in a separate "Unassigned VMs" section
-- Each VM shows:
-  - **VMID**: Virtual machine ID
-  - **Name**: VM name
-  - **Node**: Proxmox node hosting the VM
-  - **Status**: Current state (running, stopped, etc.)
-  - **CPU**: CPU usage percentage
-  - **Memory**: Memory usage (used/total)
-  - **Uptime**: How long the VM has been running
-  - **Actions**: Control buttons
+| Column   | Description                          |
+|----------|--------------------------------------|
+| VMID     | Proxmox VM/container ID              |
+| Name     | VM name                              |
+| Status   | running / stopped / etc.              |
+| CPU      | CPU usage %                          |
+| Memory   | Used / max                            |
+| Uptime   | Time running                          |
+| IP       | Guest IP (if agent present); click to copy |
+| Actions  | Start, Restart, Stop, noVNC, Delete  |
 
-### VM Actions
+Tables are grouped by **node** (e.g. `pve-node0`, `pve-node1`). There is no separate “Nodes” summary bar.
 
-For each VM, you can:
-- **Start**: Power on a stopped VM
-- **Stop**: Gracefully shut down a running VM
-- **Delete**: Remove a VM (with confirmation dialog)
-- **VNC Console**: Open a NoVNC web console in a new window
-- **Change Pool**: Move VM to a different storage pool (via dropdown)
+## Create VM from template
 
-### Deploy New VM
+1. Click **Create VM**.
+2. Choose a **Template** (e.g. `105 — tmpl-Kali`).
+3. Enter a **Name** (DNS-friendly: letters, numbers, hyphens; no spaces).
+4. Click **Create VM**.
 
-Click the "Deploy New VM" button to open the deployment dialog:
+The backend starts a clone on the template’s node with `target=pve-node0`. Creation runs as a task on Proxmox; the list will update after a refresh. New VMs use the next free VMID.
 
-#### Basic Configuration
-- **Node**: Select which Proxmox node to deploy on
-- **VMID**: Unique virtual machine ID (must be available)
-- **Name**: Display name for the VM
-- **Pool**: Select storage pool to assign VM to (optional)
+## Search and filter
 
-#### Installation Type
-Choose how to provision the VM:
-- **None**: Create VM without installation media
-- **ISO Image**: Boot from an ISO file
-- **Template**: Use a Proxmox template (requires cloning)
-- **Clone Existing VM**: Clone an existing VM
+- **Search** – Matches VM name, VMID, node, or IP as you type.
+- **Show** – “Running only” (default) or “All”.
 
-#### ISO Image Configuration
-If "ISO Image" is selected:
-- **ISO Image**: Dropdown of available ISO files on the selected node
-- ISOs are automatically fetched from all storage devices
+## API used by this page
 
-#### Template Configuration
-If "Template" is selected:
-- Note: Templates typically require cloning. Use "Clone Existing VM" option instead.
-
-#### Clone Configuration
-If "Clone Existing VM" is selected:
-- **Source VM**: Select VM to clone from (filtered by node)
-- **Clone Type**: 
-  - **Linked Clone**: Faster, shares disk with source
-  - **Full Clone**: Independent copy, slower but complete
-
-### Pool Management
-
-- VMs are automatically organized by their assigned pool
-- Use the pool dropdown next to each VM to move it between pools
-- Pools are fetched from Proxmox and displayed as separate sections
-
-### Auto-refresh
-
-- VM list automatically refreshes every 10 seconds
-- Manual refresh button available in the header
-- Loading indicators show during refresh
-
-## API Integration
-
-The Proxmox page uses multiple backend endpoints:
-- `GET /api/proxmox/vms` - Fetch all VMs
-- `GET /api/proxmox/nodes` - Get available nodes
-- `GET /api/proxmox/pools` - Get storage pools
-- `GET /api/proxmox/nodes/:node/isos-templates` - Get installation media
-- `POST /api/proxmox/vms/deploy` - Deploy new VM
-- `POST /api/proxmox/vms/:node/:vmid/start` - Start VM
-- `POST /api/proxmox/vms/:node/:vmid/stop` - Stop VM
-- `DELETE /api/proxmox/vms/:node/:vmid` - Delete VM
-- `GET /api/proxmox/vms/:node/:vmid/vnc` - Get VNC console URL
-- `PUT /api/proxmox/vms/:node/:vmid/pool` - Change VM pool
+- `GET /api/proxmox/vms` – All VMs (with guest IP when agent is available)
+- `GET /api/proxmox/nodes` – Node list
+- `GET /api/proxmox/templates` – Templates for the Create VM dropdown
+- `POST /api/proxmox/vms/create-from-template` – Clone from template (body: `templateNode`, `templateVmid`, `name`)
+- `POST /api/proxmox/vms/:node/:vmid/start` – Start
+- `POST /api/proxmox/vms/:node/:vmid/stop` – Stop
+- `POST /api/proxmox/vms/:node/:vmid/restart` – Restart
+- `DELETE /api/proxmox/vms/:node/:vmid` – Delete VM
+- `GET /api/proxmox/vms/:node/:vmid/vnc` – noVNC URL
 
 ## Configuration
 
-### Proxmox API Setup
+Proxmox is configured via environment variables (see [README](../../README.md) and [.env.example](../../.env.example)):
 
-1. Log into Proxmox web interface
-2. Go to **Datacenter** → **Permissions** → **API Tokens**
-3. Create a new token with appropriate permissions
-4. Set environment variables in backend:
-   - `PROXMOX_HOST`: Proxmox server hostname
-   - `PROXMOX_PORT`: Proxmox API port (default: 8006)
-   - `PROXMOX_USER`: Proxmox username
-   - `PROXMOX_REALM`: Authentication realm (usually "pam")
-   - `PROXMOX_TOKEN_ID`: Token ID
-   - `PROXMOX_TOKEN_SECRET`: Token secret
+- `PROXMOX_HOST`, `PROXMOX_PORT`, `PROXMOX_USER`, `PROXMOX_REALM`
+- `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`
+
+Create the token in Proxmox: **Datacenter → Permissions → API Tokens**. The token needs at least VM and node read, and VM power/clone/delete where you use those features.
 
 ## Troubleshooting
 
-### VMs not loading
-1. Verify Proxmox API credentials in backend environment variables
-2. Check backend server logs for API errors
-3. Ensure Proxmox API is accessible from backend server
-4. Verify API token has necessary permissions
-
-### Deploy fails
-1. Check that VMID is available (not already in use)
-2. Verify node has sufficient resources
-3. Ensure ISO/template exists on selected storage
-4. Check backend logs for detailed error messages
-
-### VNC console not opening
-1. Verify VM is running
-2. Check that VNC is enabled on the VM
-3. Ensure browser allows pop-ups for the site
-4. Verify Proxmox VNC service is accessible
-
-### Pool changes not saving
-1. Verify API token has pool management permissions
-2. Check backend logs for permission errors
-3. Ensure pool exists in Proxmox
-
+- **VMs not loading** – Check backend logs and Proxmox connectivity. Ensure the API token has permissions (e.g. VM.Audit, VM.Allocate).
+- **Create VM fails** – Use a template (e.g. name starting with `tmpl-` or marked template in Proxmox). Keep VM names DNS-friendly.
+- **No guest IP** – Install and enable the QEMU guest agent in the VM; IP is read from the agent.
+- **noVNC not opening** – Ensure the VM is running and the browser allows pop-ups for the Watchtower origin.

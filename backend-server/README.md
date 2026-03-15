@@ -1,93 +1,38 @@
-# Watchtower Backend (Node.js)
+# Watchtower Backend
 
-Node.js Express backend that connects to OpenVPN management interface and Proxmox API.
+Node.js Express server that proxies the Proxmox API and serves the Watchtower frontend in production. Optional: OpenVPN management for device features.
 
-## Setup
-
-### Install Dependencies
+## Run
 
 ```bash
-npm install
-```
-
-### Configuration
-
-Set environment variables:
-
-```bash
-# OpenVPN Configuration
-export OPENVPN_HOST=localhost
-export OPENVPN_PORT=7505
-export OPENVPN_PASSWORD=
-
-# Proxmox Configuration
-export PROXMOX_HOST=your-proxmox-host
-export PROXMOX_PORT=8006
-export PROXMOX_USER=root
-export PROXMOX_REALM=pam
-export PROXMOX_TOKEN_ID=your-token-id
-export PROXMOX_TOKEN_SECRET=your-token-secret
-
-# Server Configuration
-export PORT=8080
-```
-
-Or create a `.env` file (you'll need dotenv package):
-
-```env
-OPENVPN_HOST=localhost
-OPENVPN_PORT=7505
-OPENVPN_PASSWORD=
-
-PROXMOX_HOST=your-proxmox-host
-PROXMOX_PORT=8006
-PROXMOX_USER=root
-PROXMOX_REALM=pam
-PROXMOX_TOKEN_ID=your-token-id
-PROXMOX_TOKEN_SECRET=your-token-secret
-
-PORT=8080
-```
-
-### Proxmox API Token Setup
-
-1. Log into your Proxmox web interface
-2. Go to **Datacenter** → **Permissions** → **API Tokens**
-3. Click **Add** to create a new token
-4. Set the token ID and secret
-5. Copy the token ID and secret to your environment variables
-
-### Run
-
-```bash
+npm ci
+cp ../.env.example .env
+# Edit .env: PROXMOX_HOST, PROXMOX_USER, PROXMOX_REALM, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET
 npm start
 ```
 
-For development with auto-reload:
+For production, build the frontend first from the repo root:
 
 ```bash
-npm run dev
+cd ../frontend && npm ci && npm run build
 ```
 
-## API Endpoints
+Then the backend serves the UI at `http://localhost:8080` (or your `PORT`).
 
-### OpenVPN
-- `GET /api/devices` - Get list of all connected OpenVPN devices
+## Environment
 
-### Proxmox
-- `GET /api/proxmox/vms` - Get list of all VMs and containers
-- `GET /api/proxmox/nodes` - Get list of Proxmox nodes
-- `POST /api/proxmox/vms/deploy` - Deploy a new VM
-  - Body: `{ node: string, vmid: number, config: { name: string, type: 'qemu' | 'lxc', params?: object } }`
-- `DELETE /api/proxmox/vms/:node/:vmid?type=qemu` - Tear down (delete) a VM
-- `POST /api/proxmox/vms/:node/:vmid/start?type=qemu` - Start a VM
-- `POST /api/proxmox/vms/:node/:vmid/stop?type=qemu` - Stop a VM
+See the root [.env.example](../.env.example). Required for Proxmox:
 
-### General
-- `GET /api/health` - Health check endpoint
+- `PROXMOX_HOST`, `PROXMOX_USER`, `PROXMOX_REALM`, `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`
 
-## Requirements
+Optional: `PORT`, `SSL_CERT_PATH`, `SSL_KEY_PATH` (HTTPS), `OPENVPN_*`.
 
-- Node.js 18+
-- Express
-- cors
+## Scripts
+
+- `npm start` – Run server
+- `npm run dev` – Run with `--watch` for development
+
+## Docs
+
+- [Deploy (Docker, systemd, HTTPS)](../DEPLOY.md)
+- [Backend API](../docs/api/backend-api.md)

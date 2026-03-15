@@ -1,172 +1,196 @@
-# Deploying Watchtower on Your Server
+# Deploying Watchtower
 
-This guide covers running Watchtower on a dedicated server (e.g. your “Watchtower server”) with code hosted in Gitea. One Node process serves both the API and the built frontend.
-
-**Access:** Open **`http://<server-ip>:8080`** in a browser (or whatever port you set in `PORT`). One port for the whole app—no separate frontend port like 5173 in production.
+Run Watchtower on a server so you can manage Proxmox VMs from one place. Access via **`http://<server-ip>:8080`** (or **`https://`** if you configure SSL). One process serves both the API and the UI.
 
 ---
 
-## 1. Prerequisites on the server
+## 1. Docker (recommended)
 
-- **Node.js 18+** and npm
-- **Git** (to clone from Gitea)
-- Access to your **Gitea** instance from this server (clone via SSH or HTTPS)
+Stand up a container whenever you need it; no Node or build tools on the host.
 
----
+### Prerequisites
 
-## 2. Clone and install
+- Docker and Docker Compose on the server
+- Proxmox API token (Datacenter → Permissions → API Tokens)
 
-Clone the repo from Gitea (replace with your Gitea URL and path):
+### Steps
+
+1. **Clone the repo** (e.g. from Gitea):
+
+   ```bash
+   git clone <your-gitea-url>/watchtower.git /opt/watchtower
+   cd /opt/watchtower
+   ```
+
+2. **Configure environment** (`.env` in the same directory as `docker-compose.yml`):
+
+   ```bash
+   cp .env.example .env
+   # Edit .env: set PROXMOX_HOST, PROXMOX_USER, PROXMOX_REALM, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET
+   ```
+
+3. **Build and run:**
+
+   ```bash
+   docker compose up -d
+   ```
+
+4. **Open** `http://<server-ip>:8080`.
+
+### HTTPS with Docker
+
+To use HTTPS (e.g. self-signed or Let’s Encrypt), mount the cert and key and point the app at them:
+
+1. In `.env` add (paths are **inside** the container):
+
+   ```env
+   SSL_CERT_PATH=/run/secrets/ssl_cert
+   SSL_KEY_PATH=/run/secrets/ssl_key
+   ```
+
+2. In `docker-compose.yml` uncomment and adjust the `volumes` under `watchtower`:
+
+   ```yaml
+   volumes:
+     - /path/on/host/fullchain.pem:/run/secrets/ssl_cert:ro
+     - /path/on/host/privkey.pem:/run/secrets/ssl_key:ro
+   ```
+
+3. Restart: `docker compose up -d --force-recreate`.
+
+### Updating the image
 
 ```bash
-# Example: clone via SSH
-git clone git@your-gitea-host:your-org/watchtower.git /opt/watchtower
+cd /opt/watchtower
+git pull
+docker compose build --no-cache
+docker compose up -d
+```
+
+---
+
+## 2. Run on the host (no Docker)
+
+### Prerequisites
+
+- Node.js 18+ and npm
+- Git (to clone the repo)
+
+### Clone and install
+
+```bash
+git clone <your-gitea-url>/watchtower.git /opt/watchtower
 cd /opt/watchtower
 ```
 
-Install dependencies and build the frontend:
+**Backend:**
 
 ```bash
-# Backend
 cd backend-server
 npm ci
-cd ..
-
-# Frontend (build for production)
-cd frontend
-npm ci
-npm run build
-cd ..
 ```
 
-The built UI will be in `frontend/dist/`. The backend will serve it automatically when you start the server.
-
----
-
-## 3. Environment configuration
-
-Copy the example env file into `backend-server` (the server loads `.env` from that directory) and edit with your real values (do not commit `.env`):
+**Frontend (build for production):**
 
 ```bash
-cp .env.example backend-server/.env
-# Edit backend-server/.env with your Proxmox (and optional OpenVPN) settings
+cd /opt/watchtower/frontend
+npm ci
+npm run build
+```
+
+The backend will serve the built UI from `frontend/dist/`.
+
+### Environment
+
+```bash
+cp /opt/watchtower/.env.example /opt/watchtower/backend-server/.env
+# Edit backend-server/.env with Proxmox and optional SSL settings
 ```
 
 Required for Proxmox:
 
-- `PROXMOX_HOST` – Proxmox hostname or IP
-- `PROXMOX_USER` – e.g. `svc_WatchTower`
-- `PROXMOX_REALM` – e.g. `pam`
-- `PROXMOX_TOKEN_ID` – token name from Proxmox
-- `PROXMOX_TOKEN_SECRET` – token secret (UUID)
+- `PROXMOX_HOST` – Proxmox hostname or IP  
+- `PROXMOX_USER`, `PROXMOX_REALM`, `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`
 
-Optional: `PORT` (default 8080), OpenVPN vars if you use Connected Devices.
+Optional: `PORT` (default 8080), `SSL_CERT_PATH`, `SSL_KEY_PATH` for HTTPS, OpenVPN vars if you use them.
 
-### HTTPS (optional)
+### Run
 
-To serve over HTTPS (e.g. **`https://<server-ip>:8080`**), set in `backend-server/.env`:
-
-- `SSL_CERT_PATH` – path to the certificate file (e.g. `fullchain.pem` or `cert.pem`)
-- `SSL_KEY_PATH` – path to the private key file (e.g. `privkey.pem`)
-
-Use absolute paths. If both are set and the files exist, the server listens with HTTPS; otherwise it falls back to HTTP. For IP-only access you can use a self-signed certificate (browsers will show a warning you can bypass).
-
----
-
-## 4. Run the app
-
-### Option A: Run once (foreground)
-
-From the repo root:
+**One-off (foreground):**
 
 ```bash
 cd /opt/watchtower/backend-server
 node server.js
 ```
 
-You get the full app at **`http://<server-ip>:8080`** (or your `PORT`). Stopping the terminal stops the app. To use a different port (e.g. 5173), set `PORT=5173` in `backend-server/.env`.
+**systemd (survives reboot):**
 
-### Option B: systemd (recommended for a server)
+1. Create `/etc/systemd/system/watchtower.service`:
 
-Runs Watchtower as a service, restarts on crash and on reboot.
+   ```ini
+   [Unit]
+   Description=Watchtower - Proxmox VM Management
+   After=network.target
 
-1. Create a systemd unit (e.g. `/etc/systemd/system/watchtower.service`):
+   [Service]
+   Type=simple
+   User=www-data
+   WorkingDirectory=/opt/watchtower/backend-server
+   EnvironmentFile=/opt/watchtower/backend-server/.env
+   ExecStart=/usr/bin/node server.js
+   Restart=on-failure
+   RestartSec=5
 
-```ini
-[Unit]
-Description=Watchtower - Proxmox & device management
-After=network.target
+   [Install]
+   WantedBy=multi-user.target
+   ```
 
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/opt/watchtower/backend-server
-EnvironmentFile=/opt/watchtower/backend-server/.env
-ExecStart=/usr/bin/node server.js
-Restart=on-failure
-RestartSec=5
+2. Enable and start:
 
-[Install]
-WantedBy=multi-user.target
-```
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable watchtower
+   sudo systemctl start watchtower
+   sudo systemctl status watchtower
+   ```
 
-2. Use the correct paths and user for your system. If you use a different user (e.g. `deploy`), set `User=deploy` and ensure that user can read `/opt/watchtower` and `/opt/watchtower/.env`.
-
-3. Enable and start:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable watchtower
-sudo systemctl start watchtower
-sudo systemctl status watchtower
-```
-
-4. Logs:
-
-```bash
-sudo journalctl -u watchtower -f
-```
-
-### Option C: PM2
-
-If you prefer PM2 for process management:
+**PM2:**
 
 ```bash
 npm install -g pm2
 cd /opt/watchtower/backend-server
 pm2 start server.js --name watchtower
-pm2 save
-pm2 startup   # enable start on boot
+pm2 save && pm2 startup
 ```
 
----
+### HTTPS (non-Docker)
 
-## 5. Updating after code changes (e.g. from Gitea)
+In `backend-server/.env` set:
 
-When you pull new code from Gitea:
+- `SSL_CERT_PATH` – full path to certificate file  
+- `SSL_KEY_PATH` – full path to private key file  
+
+Use absolute paths. For IP-only access you can use a self-signed cert; the browser will show a warning you can bypass.
+
+### Updating after code changes
 
 ```bash
 cd /opt/watchtower
 git pull
 
-cd frontend
-npm ci
-npm run build
-
-cd ../backend-server
-npm ci
+cd frontend && npm ci && npm run build
+cd ../backend-server && npm ci
 ```
 
-Then restart:
-
-- **systemd:** `sudo systemctl restart watchtower`
-- **PM2:** `pm2 restart watchtower`
+Then restart the service (systemd: `sudo systemctl restart watchtower` or PM2: `pm2 restart watchtower`).
 
 ---
 
-## 6. Reverse proxy (optional)
+## 3. Reverse proxy (optional)
 
-To use a hostname and HTTPS (e.g. `https://watchtower.yourdomain.com`) put **nginx** (or Caddy) in front and proxy to `http://127.0.0.1:8080`. Example nginx location:
+To use a hostname and terminate SSL at a reverse proxy (e.g. `https://watchtower.yourdomain.com`), run Watchtower on HTTP (e.g. port 8080) and put Nginx (or Caddy) in front.
+
+Example Nginx location:
 
 ```nginx
 location / {
@@ -179,18 +203,16 @@ location / {
 }
 ```
 
-No need to change the app: it still listens on `PORT` (e.g. 8080); nginx handles SSL and hostname.
+No need to set `SSL_*` in Watchtower; the proxy handles TLS.
 
 ---
 
 ## Summary
 
-| Step | Action |
-|------|--------|
-| 1 | Clone repo from Gitea to the server (e.g. `/opt/watchtower`) |
-| 2 | `npm ci` in `backend-server` and `frontend`, then `npm run build` in `frontend` |
-| 3 | Copy `.env.example` to `.env` and set Proxmox (and optional OpenVPN) vars |
-| 4 | Run with systemd (recommended) or PM2 so it survives reboots |
-| 5 | On updates: `git pull`, rebuild frontend, reinstall backend deps, restart the service |
+| Method    | Use when                          |
+|----------|------------------------------------|
+| **Docker** | You want a container; easiest to stand up and move. |
+| **systemd** | You run Node on the host and want a service. |
+| **PM2**  | You prefer PM2 for process management. |
 
-The Watchtower server runs a single Node process that serves the API and the built UI; no separate frontend server is required in production.
+All methods: configure Proxmox (and optional SSL) in `.env`, then open `http(s)://<server-ip>:8080` (or your `PORT`).
