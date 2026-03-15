@@ -1,6 +1,9 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import cors from 'cors';
+import session from 'express-session';
+import cookieParser from 'cookie-parser';
 import net from 'net';
 import path from 'path';
 import fs from 'fs';
@@ -18,8 +21,40 @@ const OPENVPN_HOST = process.env.OPENVPN_HOST || '192.168.68.66';
 const OPENVPN_PORT = parseInt(process.env.OPENVPN_PORT || '7505', 10);
 const OPENVPN_PASSWORD = process.env.OPENVPN_PASSWORD || '';
 
-app.use(cors());
+// Auth: single user from env (expand later). Session secret derived from credentials if not set.
+const AUTH_USER = process.env.WATCHTOWER_USER || '';
+const AUTH_PASSWORD = process.env.WATCHTOWER_PASSWORD || '';
+const SESSION_SECRET = process.env.SESSION_SECRET || (
+  AUTH_USER && AUTH_PASSWORD
+    ? crypto.createHash('sha256').update(AUTH_USER + ':' + AUTH_PASSWORD).digest('hex')
+    : 'watchtower-fallback'
+);
+
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json());
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production' && process.env.HTTPS === '1',
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  },
+}));
+
+// Require session for /api except login and status
+app.use('/api', (req, res, next) => {
+  if (req.originalUrl === '/api/auth/login' && req.method === 'POST') return next();
+  if (req.originalUrl === '/api/auth/status' && req.method === 'GET') return next();
+  if (req.originalUrl === '/api/health' && req.method === 'GET') return next();
+  if (!req.session || !req.session.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+});
 
 // Persistent connection to OpenVPN
 let openvpnClient = null;
@@ -249,6 +284,32 @@ function parseStatus(statusText) {
   return clients;
 }
 
+// --- Auth (login with WATCHTOWER_USER / WATCHTOWER_PASSWORD from env) ---
+app.get('/api/auth/status', (req, res) => {
+  if (req.session && req.session.user) {
+    return res.json({ user: req.session.user });
+  }
+  res.status(401).json({ error: 'Not authenticated' });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!AUTH_USER || !AUTH_PASSWORD) {
+    return res.status(503).json({ error: 'Login not configured (set WATCHTOWER_USER and WATCHTOWER_PASSWORD)' });
+  }
+  if (String(username) === AUTH_USER && String(password) === AUTH_PASSWORD) {
+    req.session.user = { username: AUTH_USER };
+    return res.json({ user: req.session.user });
+  }
+  res.status(401).json({ error: 'Invalid username or password' });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ ok: true });
+  });
+});
+
 // Get connected devices
 app.get('/api/devices', async (req, res) => {
   try {
@@ -471,13 +532,16 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
   }
 });
 
+// Normalize VM type from query (avoid "undefined" string breaking Proxmox paths)
+const vmType = (t) => (t === 'lxc' ? 'lxc' : 'qemu');
+
 // Tear down (delete) a VM
 app.delete('/api/proxmox/vms/:node/:vmid', async (req, res) => {
   try {
     const { node, vmid } = req.params;
-    const { type } = req.query;
+    const type = vmType(req.query.type);
     
-    const result = await proxmox.tearDownVM(node, vmid, type || 'qemu');
+    const result = await proxmox.tearDownVM(node, vmid, type);
     res.json({ success: true, result });
   } catch (error) {
     console.error('Error tearing down VM:', error);
@@ -491,9 +555,9 @@ app.delete('/api/proxmox/vms/:node/:vmid', async (req, res) => {
 app.post('/api/proxmox/vms/:node/:vmid/start', async (req, res) => {
   try {
     const { node, vmid } = req.params;
-    const { type } = req.query;
+    const type = vmType(req.query.type);
     
-    const result = await proxmox.startVM(node, vmid, type || 'qemu');
+    const result = await proxmox.startVM(node, vmid, type);
     res.json({ success: true, result });
   } catch (error) {
     console.error('Error starting VM:', error);
@@ -507,9 +571,9 @@ app.post('/api/proxmox/vms/:node/:vmid/start', async (req, res) => {
 app.post('/api/proxmox/vms/:node/:vmid/stop', async (req, res) => {
   try {
     const { node, vmid } = req.params;
-    const { type } = req.query;
+    const type = vmType(req.query.type);
     
-    const result = await proxmox.stopVM(node, vmid, type || 'qemu');
+    const result = await proxmox.stopVM(node, vmid, type);
     res.json({ success: true, result });
   } catch (error) {
     console.error('Error stopping VM:', error);
@@ -522,9 +586,9 @@ app.post('/api/proxmox/vms/:node/:vmid/stop', async (req, res) => {
 app.post('/api/proxmox/vms/:node/:vmid/restart', async (req, res) => {
   try {
     const { node, vmid } = req.params;
-    const { type } = req.query;
+    const type = vmType(req.query.type);
     
-    const result = await proxmox.rebootVM(node, vmid, type || 'qemu');
+    const result = await proxmox.rebootVM(node, vmid, type);
     res.json({ success: true, result });
   } catch (error) {
     console.error('Error restarting VM:', error);
@@ -538,9 +602,9 @@ app.post('/api/proxmox/vms/:node/:vmid/restart', async (req, res) => {
 app.get('/api/proxmox/vms/:node/:vmid/vnc', async (req, res) => {
   try {
     const { node, vmid } = req.params;
-    const { type } = req.query;
+    const type = vmType(req.query.type);
 
-    const result = await proxmox.getVNCConsole(node, vmid, type || 'qemu');
+    const result = await proxmox.getVNCConsole(node, vmid, type);
     res.json({ success: true, ...result });
   } catch (error) {
     console.error('Error getting VNC console:', error);

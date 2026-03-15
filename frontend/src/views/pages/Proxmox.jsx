@@ -160,10 +160,12 @@ const Proxmox = () => {
     return byNode;
   };
 
+  const vmType = (vm) => (vm?.type === 'lxc' ? 'lxc' : 'qemu');
+
   // VM Actions
   const handleStart = async (vm) => {
     try {
-      await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/start?type=${vm.type}`);
+      await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/start?type=${vmType(vm)}`);
       setSnackbar({ open: true, message: `Starting VM ${vm.name}...`, severity: 'success' });
       setTimeout(() => fetchVMs(), 1000);
     } catch (err) {
@@ -173,7 +175,7 @@ const Proxmox = () => {
 
   const handleStop = async (vm) => {
     try {
-      await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/stop?type=${vm.type}`);
+      await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/stop?type=${vmType(vm)}`);
       setSnackbar({ open: true, message: `Stopping VM ${vm.name}...`, severity: 'success' });
       setTimeout(() => fetchVMs(), 1000);
     } catch (err) {
@@ -183,7 +185,7 @@ const Proxmox = () => {
 
   const handleRestart = async (vm) => {
     try {
-      await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/restart?type=${vm.type}`);
+      await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/restart?type=${vmType(vm)}`);
       setSnackbar({ open: true, message: `Restarting VM ${vm.name}...`, severity: 'success' });
       setTimeout(() => fetchVMs(), 2000);
     } catch (err) {
@@ -194,7 +196,7 @@ const Proxmox = () => {
   const handleDelete = async () => {
     if (!vmToDelete) return;
     try {
-      await api.delete(`/api/proxmox/vms/${vmToDelete.node}/${vmToDelete.vmid}?type=${vmToDelete.type}`);
+      await api.delete(`/api/proxmox/vms/${vmToDelete.node}/${vmToDelete.vmid}?type=${vmType(vmToDelete)}`);
       setSnackbar({ open: true, message: `VM ${vmToDelete.name} deleted`, severity: 'success' });
       setDeleteDialogOpen(false);
       setVmToDelete(null);
@@ -206,7 +208,7 @@ const Proxmox = () => {
 
   const handleVNC = async (vm) => {
     try {
-      const response = await api.get(`/api/proxmox/vms/${vm.node}/${vm.vmid}/vnc?type=${vm.type}`);
+      const response = await api.get(`/api/proxmox/vms/${vm.node}/${vm.vmid}/vnc?type=${vmType(vm)}`);
       if (response.data.url) {
         window.open(response.data.url, '_blank');
         setSnackbar({ open: true, message: 'Opening VNC console...', severity: 'success' });
