@@ -1067,49 +1067,40 @@ export async function updateVMPool(vmid, type, poolid, node) {
   }
 }
 
-// Get VNC console ticket and URL
-// API: POST /api2/json/nodes/{node}/qemu/{vmid}/vncproxy or /api2/json/nodes/{node}/lxc/{vmid}/vncproxy
-// When PROXMOX_PASSWORD is set, uses PVE session ticket so noVNC works without being logged into Proxmox in the browser.
+// Get VNC proxy ticket and port for WebSocket (used by proxy and by getVNCConsole).
+// Requires PROXMOX_PASSWORD so we can get a PVE session and call vncproxy.
+export async function getVNCWebSocketTicket(node, vmid, type = 'qemu') {
+  if (!PROXMOX_PASSWORD) {
+    throw new Error('PROXMOX_PASSWORD is required in .env for noVNC console access.');
+  }
+  const authTicket = await getPVETicket();
+  if (!authTicket?.ticket || !authTicket?.csrfToken) {
+    throw new Error('Failed to get Proxmox session ticket. Check PROXMOX_USER and PROXMOX_PASSWORD.');
+  }
+  const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
+  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 }, { authTicket });
+  const ticket = result?.ticket;
+  const port = result?.port != null ? result.port : 5900;
+  if (!ticket) {
+    throw new Error('Proxmox did not return a VNC ticket');
+  }
+  return { ticket, port };
+}
+
+// Build Proxmox vncwebsocket URL (for backend proxy connection to Proxmox).
+export function getProxmoxVncWebSocketUrl(node, vmid, type, ticket, port) {
+  const path = `/api2/json/nodes/${node}/${type}/${vmid}/vncwebsocket`;
+  const search = `port=${encodeURIComponent(port)}&vncticket=${encodeURIComponent(ticket)}`;
+  return `wss://${PROXMOX_HOST}:${PROXMOX_PORT}${path}?${search}`;
+}
+
+// Get VNC console: returns viewer URL that uses our WebSocket proxy (no Proxmox cookie needed).
 export async function getVNCConsole(node, vmid, type = 'qemu') {
   try {
-    console.log(`Getting VNC console for VM ${vmid} on node ${node} (type: ${type})`);
-
-    let authTicket = null;
-    if (PROXMOX_PASSWORD) {
-      try {
-        authTicket = await getPVETicket();
-      } catch (e) {
-        console.warn('PVE ticket failed (noVNC may require login in browser):', e.message);
-      }
-    }
-
-    const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
-    const requestOptions = authTicket ? { authTicket } : {};
-    let result;
-    try {
-      result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 }, requestOptions);
-    } catch (vncErr) {
-      if (!authTicket && PROXMOX_PASSWORD) {
-        throw new Error('noVNC requires PROXMOX_PASSWORD in .env so the server can obtain a console ticket. Add PROXMOX_PASSWORD and try again.');
-      }
-      throw new Error(vncErr.message || 'Failed to get VNC proxy ticket');
-    }
-
-    // Proxmox returns: { data: { ticket, port, ... } }; proxmoxRequest resolves to parsed.data
-    const vncTicket = result?.ticket;
-    if (!vncTicket) {
-      throw new Error('Proxmox did not return a VNC ticket');
-    }
-
-    const consoleType = type === 'qemu' ? 'kvm' : 'lxc';
-    const vncUrl = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/?console=${consoleType}&novnc=1&vmid=${vmid}&node=${node}&resize=1&vncticket=${encodeURIComponent(vncTicket)}`;
-
-    return {
-      ticket: vncTicket,
-      url: vncUrl,
-    };
-  } catch (error) {
-    console.error('Error getting VNC console:', error);
-    throw error;
+    await getVNCWebSocketTicket(node, vmid, type);
+  } catch (e) {
+    console.error('Error getting VNC ticket:', e.message);
+    throw e;
   }
+  return { node, vmid, type };
 }
