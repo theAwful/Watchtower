@@ -1,27 +1,28 @@
 import { Box } from '@mui/material';
 
 /**
- * Watchtower icon: tower with dome lookout, sized for login header.
+ * Blue rook icon (tower / watchtower) for login.
  */
-const WatchtowerLogo = ({ size = 80, color = 'primary.main', ...boxProps }) => (
+const WatchtowerLogo = ({ size = 80, ...boxProps }) => (
   <Box
     component="svg"
     xmlns="http://www.w3.org/2000/svg"
-    viewBox="0 0 64 88"
+    viewBox="0 0 48 64"
     width={size}
-    height={size * (88 / 64)}
-    sx={{ color, ...boxProps?.sx }}
+    height={size * (64 / 48)}
+    sx={{ ...boxProps?.sx }}
     {...boxProps}
   >
     {/* Base */}
-    <path fill="currentColor" d="M18 64h28v24H18z" opacity={0.85} />
+    <rect x="8" y="48" width="32" height="16" rx="2" fill="#1565c0" />
     {/* Tower body */}
-    <path fill="currentColor" d="M24 36h16v28H24z" />
-    {/* Dome / lookout */}
-    <path fill="currentColor" d="M32 4L20 20h24L32 4z" />
-    <path fill="currentColor" d="M26 20h12v16H26z" opacity={0.9} />
-    {/* Window */}
-    <path fill="currentColor" d="M30 44h4v6h-4z" opacity={0.5} />
+    <rect x="14" y="20" width="20" height="28" fill="#1976d2" />
+    {/* Top bar */}
+    <rect x="14" y="8" width="20" height="12" fill="#1976d2" />
+    {/* Battlements (rook top) */}
+    <rect x="15" y="0" width="6" height="8" fill="#0d47a1" />
+    <rect x="21" y="0" width="6" height="8" fill="#0d47a1" />
+    <rect x="27" y="0" width="6" height="8" fill="#0d47a1" />
   </Box>
 );
 

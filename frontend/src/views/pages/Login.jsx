@@ -25,8 +25,7 @@ const Login = ({ onLogin }) => {
         navigate(from, { replace: true });
       }
     } catch (err) {
-      const msg = err.response?.data?.error || err.message || 'Login failed';
-      setError(msg);
+      setError('Incorrect username or password');
     } finally {
       setLoading(false);
     }
