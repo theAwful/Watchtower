@@ -615,6 +615,13 @@ export async function deployVM(node, vmid, config) {
   }
 }
 
+// Get current VM status (running, stopped, etc.)
+// API: GET /api2/json/nodes/{node}/qemu|lxc/{vmid}/status/current
+export async function getVMStatus(node, vmid, type = 'qemu') {
+  const status = await proxmoxRequest(`/nodes/${node}/${type}/${vmid}/status/current`);
+  return status;
+}
+
 // Tear down (delete) a VM
 // API: DELETE /api2/json/nodes/{node}/qemu/{vmid} or DELETE /api2/json/nodes/{node}/lxc/{vmid}
 export async function tearDownVM(node, vmid, type = 'qemu') {

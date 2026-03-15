@@ -546,11 +546,22 @@ app.delete('/api/proxmox/vms/:node/:vmid', async (req, res) => {
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type);
-    
+
+    const status = await proxmox.getVMStatus(node, vmid, type);
+    if (status && status.status === 'running') {
+      return res.status(400).json({
+        error: 'VM must be stopped first',
+      });
+    }
+
     const result = await proxmox.tearDownVM(node, vmid, type);
     res.json({ success: true, result });
   } catch (error) {
     console.error('Error tearing down VM:', error);
+    const message = (error.message || '').toLowerCase();
+    if (message.includes('running') || message.includes('stop the vm') || message.includes('must be stopped')) {
+      return res.status(400).json({ error: 'VM must be stopped first' });
+    }
     res.status(500).json({
       error: error.message || 'Failed to tear down VM',
     });
