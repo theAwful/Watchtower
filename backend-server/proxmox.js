@@ -1065,12 +1065,11 @@ export async function updateVMPool(vmid, type, poolid, node) {
   }
 }
 
-// noVNC + Proxmox: vncproxy must be called with websocket=true; response gives port + ticket (vncticket).
-// For Option B (proxy through our backend), browser only talks to us; we connect to Proxmox vncwebsocket with vncticket + optional PVEAuthCookie.
-// API: POST .../vncproxy with body websocket=true → { ticket: PVEVNC:..., port }
+// noVNC + Proxmox: vncproxy must be called with websocket=1 (Proxmox rejects string "true" with "type failed got boolean true").
+// API: POST .../vncproxy with body websocket=1 → { ticket: PVEVNC:..., port }
 export async function getVNCConsole(node, vmid, type = 'qemu') {
   const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
-  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 'true' });
+  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
   const vncticket = result?.ticket;
   const port = result?.port != null ? result.port : 5900;
   const consoleType = type === 'qemu' ? 'kvm' : 'lxc';
@@ -1092,10 +1091,10 @@ export async function getVNCConsole(node, vmid, type = 'qemu') {
   return { ticket: vncticket || '', port, url: vncUrl };
 }
 
-/** Get vncticket + port for WebSocket proxy. Proxmox forum: call vncproxy with websocket=true. */
+/** Get vncticket + port for WebSocket proxy. Proxmox expects websocket=1 (integer), not string "true". */
 export async function getVNCWebSocketTicket(node, vmid, type = 'qemu') {
   const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
-  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 'true' });
+  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
   const ticket = result?.ticket;
   const port = result?.port != null ? result.port : 5900;
   if (!ticket) throw new Error('Proxmox vncproxy did not return a ticket');
