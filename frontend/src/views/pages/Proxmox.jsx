@@ -59,8 +59,6 @@ const Proxmox = () => {
   });
   const [vmTemplates, setVmTemplates] = useState([]);
   const [createSubmitting, setCreateSubmitting] = useState(false);
-  const [vncConsoleOpen, setVncConsoleOpen] = useState(false);
-  const [vncViewerUrl, setVncViewerUrl] = useState(null);
 
   // Format bytes to human readable
   const formatBytes = (bytes) => {
@@ -210,23 +208,16 @@ const Proxmox = () => {
 
   const handleVNC = async (vm) => {
     try {
-      const response = await api.post('/api/console/session', {
-        node: vm.node,
-        vmid: vm.vmid,
-        type: vmType(vm),
-      });
-      const { wsPath } = response.data;
-      if (wsPath) {
-        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-        const host = window.location.host;
-        setVncViewerUrl(`${protocol}//${host}/vnc-viewer?wsPath=${encodeURIComponent(wsPath)}`);
-        setVncConsoleOpen(true);
-        setSnackbar({ open: true, message: 'Opening console… Connect within a few seconds.', severity: 'success' });
+      const response = await api.get(`/api/proxmox/vms/${vm.node}/${vm.vmid}/console?type=${vmType(vm)}`);
+      const url = response.data?.url;
+      if (url) {
+        window.open(url, '_blank', 'noopener,noreferrer');
+        setSnackbar({ open: true, message: 'Console opened in new tab. Log into Proxmox in this browser first if it doesn’t load.', severity: 'info' });
       } else {
-        setSnackbar({ open: true, message: 'No console path returned', severity: 'warning' });
+        setSnackbar({ open: true, message: 'No console URL returned', severity: 'warning' });
       }
     } catch (err) {
-      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to create console session', severity: 'error' });
+      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to get console', severity: 'error' });
     }
   };
 
@@ -554,26 +545,6 @@ const Proxmox = () => {
             Delete
           </Button>
         </DialogActions>
-      </Dialog>
-
-      {/* VNC Console (in-app iframe) */}
-      <Dialog
-        open={vncConsoleOpen}
-        onClose={() => { setVncConsoleOpen(false); setVncViewerUrl(null); }}
-        fullScreen
-        PaperProps={{ sx: { bgcolor: '#1a1a1a' } }}
-      >
-        <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', py: 1 }}>
-          <Typography variant="h6">Console</Typography>
-          <Button variant="outlined" size="small" onClick={() => { setVncConsoleOpen(false); setVncViewerUrl(null); }}>
-            Close
-          </Button>
-        </DialogTitle>
-        <DialogContent sx={{ p: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {vncViewerUrl && (
-            <Box component="iframe" src={vncViewerUrl} sx={{ flex: 1, width: '100%', border: 0, minHeight: 400 }} title="VNC Console" />
-          )}
-        </DialogContent>
       </Dialog>
 
       {/* Snackbar for notifications */}

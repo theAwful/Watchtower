@@ -10,23 +10,11 @@ import fs from 'fs';
 import https from 'https';
 import http from 'http';
 import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
 import * as proxmox from './proxmox.js';
-
-const require = createRequire(import.meta.url);
-let WebSocket = null;
-try {
-  WebSocket = require('ws');
-} catch (e) {
-  console.warn('Optional "ws" not installed. In-app VNC console disabled. Run: npm install ws');
-}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = parseInt(process.env.PORT || '8080', 10);
-
-// Short-lived console sessions: consoleId -> { node, vmid, type, port, vncTicket, pveTicket, createdAt }. Reject if > 10s.
-const consoleSessions = new Map();
 
 // OpenVPN management interface configuration
 const OPENVPN_HOST = process.env.OPENVPN_HOST || '192.168.68.66';
@@ -67,7 +55,6 @@ app.use('/api', (req, res, next) => {
   if (pathOnly === '/api/auth/login' && req.method === 'POST') return next();
   if (pathOnly === '/api/auth/status' && req.method === 'GET') return next();
   if (pathOnly === '/api/health' && req.method === 'GET') return next();
-  if (pathOnly.startsWith('/api/console/ws/')) return next(); // WebSocket proxy; session looked up by consoleId
   if (!req.session || !req.session.user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -651,39 +638,16 @@ app.get('/api/proxmox/set-session', async (req, res) => {
   }
 });
 
-// Console session: create short-lived session (vncproxy with PVE Cookie+CSRF), return wsPath for noVNC.
-// Flow: browser → POST /api/console/session → backend gets PVE auth, calls vncproxy, stores session → returns wsPath → browser connects to wsPath within ~10s.
-app.post('/api/console/session', async (req, res) => {
+// Console URL: backend gets vncticket via API token (vncproxy), returns Proxmox noVNC URL. User must be logged into Proxmox in the browser (PVEAuthCookie) for noVNC to work.
+app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
   try {
-    const { node, vmid, type: typeParam } = req.body || {};
-    const type = vmType(typeParam) || 'qemu';
-    if (!node || !vmid) {
-      return res.status(400).json({ error: 'node and vmid are required' });
-    }
-    const auth = await proxmox.getProxmoxAuth();
-    const { port, ticket: vncTicket } = await proxmox.createVncProxySession(auth, node, vmid, type);
-    const consoleId = crypto.randomUUID();
-    consoleSessions.set(consoleId, {
-      node,
-      vmid,
-      type,
-      port,
-      vncTicket,
-      pveTicket: auth.ticket,
-      createdAt: Date.now(),
-    });
-    res.json({
-      consoleId,
-      wsPath: `/api/console/ws/${consoleId}`,
-    });
+    const { node, vmid } = req.params;
+    const type = vmType(req.query.type) || 'qemu';
+    const result = await proxmox.getVNCConsole(node, vmid, type);
+    res.json({ success: true, url: result.url });
   } catch (err) {
-    console.error('[Console] session failed:', err.message);
-    if (err.message && err.message.includes('access/ticket')) {
-      const dbg = proxmox.debugProxmoxPasswordRead?.();
-      if (dbg) console.error('[Console] PROXMOX_PASSWORD check (never log full value):', dbg);
-      console.error('[Console] Ticket user sent:', process.env.PROXMOX_CONSOLE_USER ? `${process.env.PROXMOX_CONSOLE_USER}@${process.env.PROXMOX_CONSOLE_REALM || 'pam'}` : `${process.env.PROXMOX_USER}@${process.env.PROXMOX_REALM || 'pam'}`);
-    }
-    res.status(500).json({ error: err.message || 'Failed to create console session' });
+    console.error('[Console]', err.message);
+    res.status(500).json({ error: err.message || 'Failed to get console URL' });
   }
 });
 
@@ -761,74 +725,6 @@ app.put('/api/proxmox/vms/:node/:vmid/pool', async (req, res) => {
   }
 });
 
-// In-app VNC viewer: standalone HTML loaded in iframe; noVNC from CDN (avoids bundling in frontend).
-const VNC_VIEWER_HTML = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>VNC Console</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #1a1a1a; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
-    #status { padding: 8px 12px; background: #2d2d2d; color: #ccc; font-size: 13px; }
-    #status.error { color: #f44; }
-    #screen { flex: 1; min-height: 0; width: 100%; }
-  </style>
-</head>
-<body>
-  <div id="status">Connecting…</div>
-  <div id="screen"></div>
-  <script type="module">
-    const params = new URLSearchParams(location.search);
-    const wsPath = params.get('wsPath');
-    const statusEl = document.getElementById('status');
-    const screenEl = document.getElementById('screen');
-    const setStatus = (msg, isError) => { statusEl.textContent = msg; statusEl.className = isError ? 'error' : ''; };
-    if (!wsPath || !wsPath.startsWith('/')) { setStatus('Missing wsPath', true); throw 0; }
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = proto + '//' + location.host + wsPath;
-    try {
-      let RFB;
-      const findRFB = (m) => {
-        if (!m) return null;
-        if (typeof m === 'function' && m.prototype) return m;
-        if (typeof m.default === 'function' && m.default.prototype) return m.default;
-        if (typeof m.RFB === 'function' && m.RFB.prototype) return m.RFB;
-        if (m.default && typeof m.default.default === 'function') return m.default.default;
-        return null;
-      };
-      for (const url of [
-        'https://cdn.skypack.dev/@novnc/novnc@1.4.0',
-        'https://esm.run/@novnc/novnc@1.4.0'
-      ]) {
-        const mod = await import(url);
-        RFB = findRFB(mod) || findRFB(mod?.default);
-        if (RFB) break;
-      }
-      if (typeof RFB !== 'function') throw new Error('RFB not found');
-      var ws = new WebSocket(wsUrl);
-      ws.binaryType = 'arraybuffer';
-      ws.onclose = (e) => {
-        if (e.code !== 1000 && e.code !== 1005) setStatus('Connection closed: ' + (e.reason || 'code ' + e.code), true);
-      };
-      ws.onerror = () => setStatus('WebSocket error. Check backend logs for [VNC] and that VM is running.', true);
-      const rfb = new RFB(screenEl, ws);
-      rfb.scaleViewport = true;
-      rfb.resizeSession = true;
-      rfb.addEventListener('connect', () => setStatus('Connected'));
-      rfb.addEventListener('disconnect', (e) => { if (e.detail?.clean) setStatus('Disconnected'); });
-    } catch (e) {
-      setStatus('Error: ' + (e?.message || e), true);
-    }
-  </script>
-</body>
-</html>`;
-
-app.get('/vnc-viewer', (req, res) => {
-  res.setHeader('Content-Type', 'text/html');
-  res.send(VNC_VIEWER_HTML);
-});
-
 // Serve frontend build in production (single process: API + static UI)
 const frontendDist = path.resolve(__dirname, '..', 'frontend', 'dist');
 const indexHtml = path.join(frontendDist, 'index.html');
@@ -874,72 +770,6 @@ function createServer() {
 
 const server = createServer();
 if (!server) process.exit(1);
-
-if (WebSocket) {
-  try {
-    const wss = new WebSocket.Server({ noServer: true });
-    const CONSOLE_WS_TIMEOUT_MS = 10_000;
-
-    server.on('upgrade', (request, socket, head) => {
-      const url = new URL(request.url || '', `http://${request.headers.host}`);
-      const match = url.pathname.match(/^\/api\/console\/ws\/([a-zA-Z0-9-]+)$/);
-      if (!match) {
-        socket.destroy();
-        return;
-      }
-      const consoleId = match[1];
-      const session = consoleSessions.get(consoleId);
-      if (!session) {
-        socket.destroy();
-        return;
-      }
-      if (Date.now() - session.createdAt > CONSOLE_WS_TIMEOUT_MS) {
-        consoleSessions.delete(consoleId);
-        socket.destroy();
-        return;
-      }
-      consoleSessions.delete(consoleId);
-
-      wss.handleUpgrade(request, socket, head, (clientWs) => {
-        wss.emit('connection', clientWs, request, session);
-      });
-    });
-
-    wss.on('connection', (clientWs, request, session) => {
-      const proxUrl = proxmox.getProxmoxVncWebSocketUrl(session.node, session.vmid, session.type, session.vncTicket, session.port);
-      const proxWs = new WebSocket(proxUrl, {
-        rejectUnauthorized: false,
-        headers: { Cookie: `PVEAuthCookie=${session.pveTicket}` },
-      });
-      proxWs.binaryType = 'arraybuffer';
-      clientWs.binaryType = 'arraybuffer';
-
-      proxWs.on('open', () => console.log('[Console] Proxmox tunnel up:', session.node, session.vmid));
-      proxWs.on('message', (data) => {
-        if (clientWs.readyState === WebSocket.OPEN) clientWs.send(data);
-      });
-      proxWs.on('close', (code, reason) => {
-        if (clientWs.readyState === WebSocket.OPEN) clientWs.close(code, reason?.toString?.() || '');
-      });
-      proxWs.on('error', (err) => {
-        console.error('[Console] Proxmox ws:', err.message);
-        if (clientWs.readyState === WebSocket.OPEN) clientWs.close(1011, 'Proxmox websocket error');
-      });
-
-      clientWs.on('message', (data) => {
-        if (proxWs.readyState === WebSocket.OPEN) proxWs.send(data);
-      });
-      clientWs.on('close', () => {
-        if (proxWs.readyState === WebSocket.OPEN) proxWs.close();
-      });
-      clientWs.on('error', () => {
-        if (proxWs.readyState === WebSocket.OPEN) proxWs.close();
-      });
-    });
-  } catch (err) {
-    console.warn('WebSocket server setup failed:', err.message);
-  }
-}
 
 const onListen = () => {
   console.log(`Watchtower Server running on port ${PORT} (${SSL_CERT_PATH ? 'HTTPS' : 'HTTP'})`);
