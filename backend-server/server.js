@@ -678,6 +678,10 @@ app.post('/api/console/session', async (req, res) => {
     });
   } catch (err) {
     console.error('[Console] session failed:', err.message);
+    if (err.message && err.message.includes('access/ticket')) {
+      const dbg = proxmox.debugProxmoxPasswordRead?.();
+      if (dbg) console.error('[Console] PROXMOX_PASSWORD check (never log full value):', dbg);
+    }
     res.status(500).json({ error: err.message || 'Failed to create console session' });
   }
 });

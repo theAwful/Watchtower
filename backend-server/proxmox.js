@@ -218,7 +218,18 @@ export async function getPVETicket() {
         try {
           const text = chunks.join('').trim();
           if (res.statusCode !== 200) {
-            reject(new Error(`Proxmox access/ticket failed: ${res.statusCode}`));
+            let msg = `Proxmox access/ticket failed: ${res.statusCode}`;
+            if (text) {
+              try {
+                const errJson = JSON.parse(text);
+                if (errJson.errors) msg += ' - ' + JSON.stringify(errJson.errors);
+                else if (errJson.message) msg += ' - ' + errJson.message;
+                else if (text.length < 200) msg += ' - ' + text;
+              } catch (_) {
+                if (text.length < 200) msg += ' - ' + text;
+              }
+            }
+            reject(new Error(msg));
             return;
           }
           const parsed = JSON.parse(text);
@@ -240,6 +251,13 @@ export async function getPVETicket() {
     req.write(body);
     req.end();
   });
+}
+
+/** Verify PROXMOX_PASSWORD is read (length + first/last char only). Never log the actual password. */
+export function debugProxmoxPasswordRead() {
+  const p = process.env.PROXMOX_PASSWORD || '';
+  const len = p.length;
+  return { length: len, first: len ? p[0] : '(empty)', last: len ? p[len - 1] : '(empty)' };
 }
 
 // Get guest IP from QEMU guest agent (requires agent installed and VM running)
