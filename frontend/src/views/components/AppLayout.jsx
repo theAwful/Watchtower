@@ -20,11 +20,14 @@ import {
   LightMode as LightModeIcon,
   DarkMode as DarkModeIcon,
   Cloud as CloudIcon,
+  Logout as LogoutIcon,
 } from '@mui/icons-material';
+import { useAuth } from '../../contexts/AuthContext';
 
 const AppLayout = ({ toggleTheme, currentTheme }) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const location = useLocation();
+  const { user, logout } = useAuth();
 
   const toggleDrawer = (open) => () => {
     setDrawerOpen(open);
@@ -46,7 +49,9 @@ const AppLayout = ({ toggleTheme, currentTheme }) => {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Watchtower
           </Typography>
-          
+          {user?.username && (
+            <Typography variant="body2" sx={{ mr: 2 }}>{user.username}</Typography>
+          )}
           <Button 
             color="inherit" 
             component={Link} 
@@ -66,6 +71,11 @@ const AppLayout = ({ toggleTheme, currentTheme }) => {
               sx={{ mr: 2 }}
             >
               {currentTheme === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Sign out">
+            <IconButton color="inherit" onClick={logout} edge="end">
+              <LogoutIcon />
             </IconButton>
           </Tooltip>
         </Toolbar>

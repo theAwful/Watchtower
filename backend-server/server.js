@@ -1,6 +1,9 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import cors from 'cors';
+import session from 'express-session';
+import cookieParser from 'cookie-parser';
 import net from 'net';
 import path from 'path';
 import fs from 'fs';
@@ -18,8 +21,42 @@ const OPENVPN_HOST = process.env.OPENVPN_HOST || '192.168.68.66';
 const OPENVPN_PORT = parseInt(process.env.OPENVPN_PORT || '7505', 10);
 const OPENVPN_PASSWORD = process.env.OPENVPN_PASSWORD || '';
 
-app.use(cors());
+// Auth: single user from env. Session secret derived from credentials if not set.
+const AUTH_USER = process.env.WATCHTOWER_USER || '';
+const AUTH_PASSWORD = process.env.WATCHTOWER_PASSWORD || '';
+const SESSION_SECRET = process.env.SESSION_SECRET || (
+  AUTH_USER && AUTH_PASSWORD
+    ? crypto.createHash('sha256').update(AUTH_USER + ':' + AUTH_PASSWORD).digest('hex')
+    : 'watchtower-fallback'
+);
+
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json());
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    path: '/',
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production' && process.env.HTTPS === '1',
+    sameSite: 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000,
+  },
+}));
+
+// Require session for /api except auth and health
+app.use('/api', (req, res, next) => {
+  const pathOnly = (req.originalUrl || req.url || '').split('?')[0];
+  if (pathOnly === '/api/auth/login' && req.method === 'POST') return next();
+  if (pathOnly === '/api/auth/status' && req.method === 'GET') return next();
+  if (pathOnly === '/api/health' && req.method === 'GET') return next();
+  if (!req.session || !req.session.user) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+});
 
 // Persistent connection to OpenVPN
 let openvpnClient = null;
@@ -248,6 +285,36 @@ function parseStatus(statusText) {
 
   return clients;
 }
+
+// --- Auth ---
+app.get('/api/auth/status', (req, res) => {
+  if (req.session && req.session.user) {
+    return res.json({ user: req.session.user });
+  }
+  res.status(401).json({ error: 'Not authenticated' });
+});
+
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!AUTH_USER || !AUTH_PASSWORD) {
+    return res.status(503).json({ error: 'Login not configured (set WATCHTOWER_USER and WATCHTOWER_PASSWORD)' });
+  }
+  if (String(username) === AUTH_USER && String(password) === AUTH_PASSWORD) {
+    req.session.user = { username: AUTH_USER };
+    req.session.save((err) => {
+      if (err) return res.status(500).json({ error: 'Session error' });
+      res.json({ user: req.session.user });
+    });
+    return;
+  }
+  res.status(401).json({ error: 'Incorrect username or password' });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ ok: true });
+  });
+});
 
 // Get connected devices
 app.get('/api/devices', async (req, res) => {

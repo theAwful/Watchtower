@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { ThemeProvider, createTheme, CssBaseline, Box, CircularProgress } from '@mui/material';
 import Proxmox from './views/pages/Proxmox';
 import AppLayout from './views/components/AppLayout';
+import Login from './views/pages/Login';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Cookies from 'js-cookie';
 
 // Create theme options
@@ -179,16 +181,38 @@ function App() {
     setMode((prevMode) => (prevMode === 'light' ? 'dark' : 'light'));
   };
 
+  function AppRoutes() {
+    const { user, loading, login } = useAuth();
+    const location = useLocation();
+
+    if (loading) {
+      return (
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
+          <CircularProgress />
+        </Box>
+      );
+    }
+    if (!user) {
+      return <Login onLogin={login} />;
+    }
+    return (
+      <Routes>
+        <Route path="/" element={<AppLayout toggleTheme={toggleTheme} currentTheme={mode} />}>
+          <Route index element={<Proxmox />} />
+          <Route path="proxmox" element={<Proxmox />} />
+        </Route>
+        <Route path="/login" element={<Navigate to="/" state={{ from: location }} replace />} />
+      </Routes>
+    );
+  }
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Router>
-        <Routes>
-          <Route path="/" element={<AppLayout toggleTheme={toggleTheme} currentTheme={mode} />}>
-            <Route index element={<Proxmox />} />
-            <Route path="proxmox" element={<Proxmox />} />
-          </Route>
-        </Routes>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
       </Router>
     </ThemeProvider>
   );
