@@ -32,20 +32,26 @@ function toFormUrlEncoded(obj) {
 // Proxmox API returns: { data: [...] } format
 // options.useExtjs: use /api2/extjs/ base (required for clone on some Proxmox versions)
 // options.authTicket: { ticket, csrfToken } use PVE session cookie + CSRF instead of API token (for vncproxy etc.)
-async function proxmoxRequest(endpoint, method = 'GET', data = null, options = {}) {
-  const baseUrl = options.useExtjs ? PROXMOX_BASE_URL_EXTJS : PROXMOX_BASE_URL_JSON;
+async function proxmoxRequest(endpoint, method = 'GET', data = null, opts = {}) {
+  const baseUrl = opts.useExtjs ? PROXMOX_BASE_URL_EXTJS : PROXMOX_BASE_URL_JSON;
   return new Promise((resolve, reject) => {
     const url = new URL(`${baseUrl}${endpoint}`);
-    
     const headers = {};
-    
-    if (options.authTicket?.ticket && options.authTicket?.csrfToken) {
-      headers['Cookie'] = `PVEAuthCookie=${options.authTicket.ticket}`;
-      headers['CSRFPreventionToken'] = options.authTicket.csrfToken;
-    } else if (PROXMOX_TOKEN_ID && PROXMOX_TOKEN_SECRET) {
-      headers['Authorization'] = `PVEAPIToken=${PROXMOX_USER}@${PROXMOX_REALM}!${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}`;
+
+    // Use PVE session ticket only when explicitly provided (e.g. for vncproxy). All other calls use API token.
+    const useTicket = opts.authTicket?.ticket && opts.authTicket?.csrfToken;
+    if (useTicket) {
+      headers['Cookie'] = `PVEAuthCookie=${opts.authTicket.ticket}`;
+      headers['CSRFPreventionToken'] = opts.authTicket.csrfToken;
+    } else {
+      if (PROXMOX_TOKEN_ID && PROXMOX_TOKEN_SECRET) {
+        headers['Authorization'] = `PVEAPIToken=${PROXMOX_USER}@${PROXMOX_REALM}!${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}`;
+      } else {
+        reject(new Error('Proxmox API auth missing: set PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET in .env'));
+        return;
+      }
     }
-    
+
     // Proxmox API requires application/x-www-form-urlencoded for POST/PUT
     let body = null;
     if (data && (method === 'POST' || method === 'PUT')) {
@@ -53,18 +59,17 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null, options = {
       headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8';
       headers['Content-Length'] = Buffer.byteLength(body, 'utf8');
     }
-    
-    const options = {
+
+    const reqOptions = {
       hostname: url.hostname,
       port: url.port || PROXMOX_PORT,
       path: url.pathname + url.search,
       method,
       headers,
-      // Disable SSL verification for self-signed certificates (common in Proxmox)
       rejectUnauthorized: false,
     };
-    
-    const req = https.request(options, (res) => {
+
+    const req = https.request(reqOptions, (res) => {
       const chunks = [];
       
       // Set encoding to UTF-8 to properly handle text responses
