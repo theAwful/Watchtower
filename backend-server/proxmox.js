@@ -9,8 +9,6 @@ const PROXMOX_TOKEN_ID = process.env.PROXMOX_TOKEN_ID || '';
 const PROXMOX_TOKEN_SECRET = process.env.PROXMOX_TOKEN_SECRET || '';
 const PROXMOX_USER = process.env.PROXMOX_USER || 'root';
 const PROXMOX_REALM = process.env.PROXMOX_REALM || 'pam';
-/** Optional: password for PVE session ticket (required for noVNC when user is not logged into Proxmox in browser) */
-const PROXMOX_PASSWORD = process.env.PROXMOX_PASSWORD || '';
 
 // Base URLs for Proxmox API (extjs required for clone on some versions)
 const PROXMOX_BASE_URL_JSON = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/api2/json`;
@@ -30,26 +28,17 @@ function toFormUrlEncoded(obj) {
 
 // Helper function to make Proxmox API requests
 // Proxmox API returns: { data: [...] } format
-// options.useExtjs: use /api2/extjs/ base (required for clone on some Proxmox versions)
-// options.authTicket: { ticket, csrfToken } use PVE session cookie + CSRF instead of API token (for vncproxy etc.)
+// opts.useExtjs: use /api2/extjs/ base (required for clone on some Proxmox versions)
 async function proxmoxRequest(endpoint, method = 'GET', data = null, opts = {}) {
   const baseUrl = opts.useExtjs ? PROXMOX_BASE_URL_EXTJS : PROXMOX_BASE_URL_JSON;
   return new Promise((resolve, reject) => {
     const url = new URL(`${baseUrl}${endpoint}`);
     const headers = {};
-
-    // Use PVE session ticket only when explicitly provided (e.g. for vncproxy). All other calls use API token.
-    const useTicket = opts.authTicket?.ticket && opts.authTicket?.csrfToken;
-    if (useTicket) {
-      headers['Cookie'] = `PVEAuthCookie=${opts.authTicket.ticket}`;
-      headers['CSRFPreventionToken'] = opts.authTicket.csrfToken;
+    if (PROXMOX_TOKEN_ID && PROXMOX_TOKEN_SECRET) {
+      headers['Authorization'] = `PVEAPIToken=${PROXMOX_USER}@${PROXMOX_REALM}!${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}`;
     } else {
-      if (PROXMOX_TOKEN_ID && PROXMOX_TOKEN_SECRET) {
-        headers['Authorization'] = `PVEAPIToken=${PROXMOX_USER}@${PROXMOX_REALM}!${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}`;
-      } else {
-        reject(new Error('Proxmox API auth missing: set PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET in .env'));
-        return;
-      }
+      reject(new Error('Proxmox API auth missing: set PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET in .env'));
+      return;
     }
 
     // Proxmox API requires application/x-www-form-urlencoded for POST/PUT
@@ -187,59 +176,6 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null, opts = {}) 
       req.write(body);
     }
     
-    req.end();
-  });
-}
-
-/**
- * Get a PVE session ticket (for noVNC). Requires PROXMOX_PASSWORD in env.
- * POST /api2/json/access/ticket with username, password, realm.
- * Returns { ticket, csrfToken } or null if not configured / failed.
- */
-async function getPVETicket() {
-  if (!PROXMOX_PASSWORD) return null;
-  const body = toFormUrlEncoded({
-    username: `${PROXMOX_USER}@${PROXMOX_REALM}`,
-    password: PROXMOX_PASSWORD,
-    realm: PROXMOX_REALM,
-  });
-  return new Promise((resolve, reject) => {
-    const reqOptions = {
-      hostname: PROXMOX_HOST,
-      port: PROXMOX_PORT,
-      path: '/api2/json/access/ticket',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Content-Length': Buffer.byteLength(body, 'utf8'),
-      },
-      rejectUnauthorized: false,
-    };
-    const req = https.request(reqOptions, (res) => {
-      const chunks = [];
-      res.setEncoding('utf8');
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => {
-        try {
-          const text = chunks.join('').trim();
-          if (res.statusCode !== 200) {
-            reject(new Error(`Proxmox ticket failed: ${res.statusCode} - ${text.substring(0, 200)}`));
-            return;
-          }
-          const parsed = JSON.parse(text);
-          const data = parsed?.data;
-          if (!data?.ticket || !data?.CSRFPreventionToken) {
-            reject(new Error('Proxmox ticket response missing ticket or CSRFPreventionToken'));
-            return;
-          }
-          resolve({ ticket: data.ticket, csrfToken: data.CSRFPreventionToken });
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.write(body);
     req.end();
   });
 }
@@ -1067,40 +1003,13 @@ export async function updateVMPool(vmid, type, poolid, node) {
   }
 }
 
-// Get VNC proxy ticket and port for WebSocket (used by proxy and by getVNCConsole).
-// Requires PROXMOX_PASSWORD so we can get a PVE session and call vncproxy.
-export async function getVNCWebSocketTicket(node, vmid, type = 'qemu') {
-  if (!PROXMOX_PASSWORD) {
-    throw new Error('PROXMOX_PASSWORD is required in .env for noVNC console access.');
-  }
-  const authTicket = await getPVETicket();
-  if (!authTicket?.ticket || !authTicket?.csrfToken) {
-    throw new Error('Failed to get Proxmox session ticket. Check PROXMOX_USER and PROXMOX_PASSWORD.');
-  }
-  const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
-  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 }, { authTicket });
-  const ticket = result?.ticket;
-  const port = result?.port != null ? result.port : 5900;
-  if (!ticket) {
-    throw new Error('Proxmox did not return a VNC ticket');
-  }
-  return { ticket, port };
-}
-
-// Build Proxmox vncwebsocket URL (for backend proxy connection to Proxmox).
-export function getProxmoxVncWebSocketUrl(node, vmid, type, ticket, port) {
-  const path = `/api2/json/nodes/${node}/${type}/${vmid}/vncwebsocket`;
-  const search = `port=${encodeURIComponent(port)}&vncticket=${encodeURIComponent(ticket)}`;
-  return `wss://${PROXMOX_HOST}:${PROXMOX_PORT}${path}?${search}`;
-}
-
-// Get VNC console: returns viewer URL that uses our WebSocket proxy (no Proxmox cookie needed).
+// Get VNC console ticket and URL (opens Proxmox noVNC page; user must be logged into Proxmox in browser for ticket to work).
+// API: POST /api2/json/nodes/{node}/qemu|lxc/{vmid}/vncproxy
 export async function getVNCConsole(node, vmid, type = 'qemu') {
-  try {
-    await getVNCWebSocketTicket(node, vmid, type);
-  } catch (e) {
-    console.error('Error getting VNC ticket:', e.message);
-    throw e;
-  }
-  return { node, vmid, type };
+  const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
+  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
+  const ticket = result?.ticket;
+  const consoleType = type === 'qemu' ? 'kvm' : 'lxc';
+  const vncUrl = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/?console=${consoleType}&novnc=1&vmid=${vmid}&node=${node}&resize=1${ticket ? '&ticket=' + encodeURIComponent(ticket) : ''}`;
+  return { ticket: ticket || '', url: vncUrl };
 }
