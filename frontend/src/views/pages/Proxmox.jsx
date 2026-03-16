@@ -208,7 +208,10 @@ const Proxmox = () => {
 
   const handleVNC = async (vm) => {
     try {
-      const response = await api.get(`/api/proxmox/vms/${vm.node}/${vm.vmid}/console?type=${vmType(vm)}`);
+      const type = vmType(vm);
+      const vmname = (vm.name && typeof vm.name === 'string') ? encodeURIComponent(vm.name) : '';
+      const url = `/api/proxmox/vms/${vm.node}/${vm.vmid}/console?type=${type}${vmname ? `&vmname=${vmname}` : ''}`;
+      const response = await api.get(url);
       const url = response.data?.url;
       if (url) {
         window.open(url, '_blank', 'noopener,noreferrer');

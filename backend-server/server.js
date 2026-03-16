@@ -643,7 +643,8 @@ app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type) || 'qemu';
-    const result = await proxmox.getVNCConsole(node, vmid, type);
+    const vmname = (req.query.vmname && typeof req.query.vmname === 'string') ? req.query.vmname : '';
+    const result = await proxmox.getVNCConsole(node, vmid, type, vmname);
     if (!result?.url) {
       return res.status(502).json({ error: 'Proxmox vncproxy did not return a console URL' });
     }

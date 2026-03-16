@@ -1086,9 +1086,9 @@ export async function updateVMPool(vmid, type, poolid, node) {
   }
 }
 
-// noVNC + Proxmox: vncproxy must be called with websocket=1 (Proxmox rejects string "true" with "type failed got boolean true").
+// noVNC + Proxmox: vncproxy with websocket=1 → vncticket + port. Build URL to match Proxmox web console (vmname, resize=off, cmd=).
 // API: POST .../vncproxy with body websocket=1 → { ticket: PVEVNC:..., port }
-export async function getVNCConsole(node, vmid, type = 'qemu') {
+export async function getVNCConsole(node, vmid, type = 'qemu', vmname = '') {
   const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
   const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
   const vncticket = result?.ticket;
@@ -1100,14 +1100,12 @@ export async function getVNCConsole(node, vmid, type = 'qemu') {
     novnc: '1',
     vmid: String(vmid),
     node,
-    resize: '1',
+    resize: 'off',
+    cmd: '',
   });
-  if (vncticket) {
-    params.set('vncticket', vncticket);
-  }
-  if (port && port !== 5900) {
-    params.set('port', String(port));
-  }
+  if (vmname) params.set('vmname', vmname);
+  if (vncticket) params.set('vncticket', vncticket);
+  if (port && port !== 5900) params.set('port', String(port));
   const vncUrl = `${base}/?${params.toString()}`;
   return { ticket: vncticket || '', port, url: vncUrl };
 }
