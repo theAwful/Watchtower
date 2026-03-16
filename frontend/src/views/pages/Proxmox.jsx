@@ -210,11 +210,11 @@ const Proxmox = () => {
     try {
       const type = vmType(vm);
       const vmname = (vm.name && typeof vm.name === 'string') ? encodeURIComponent(vm.name) : '';
-      const url = `/api/proxmox/vms/${vm.node}/${vm.vmid}/console?type=${type}${vmname ? `&vmname=${vmname}` : ''}`;
-      const response = await api.get(url);
-      const url = response.data?.url;
-      if (url) {
-        window.open(url, '_blank', 'noopener,noreferrer');
+      const apiUrl = `/api/proxmox/vms/${vm.node}/${vm.vmid}/console?type=${type}${vmname ? `&vmname=${vmname}` : ''}`;
+      const response = await api.get(apiUrl);
+      const consoleUrl = response.data?.url;
+      if (consoleUrl) {
+        window.open(consoleUrl, '_blank', 'noopener,noreferrer');
         setSnackbar({ open: true, message: 'Console opened in new tab. Log into Proxmox in this browser first if it doesn’t load.', severity: 'info' });
       } else {
         setSnackbar({ open: true, message: 'No console URL returned', severity: 'warning' });
