@@ -638,12 +638,15 @@ app.get('/api/proxmox/set-session', async (req, res) => {
   }
 });
 
-// Console URL: backend gets vncticket via API token (vncproxy), returns Proxmox noVNC URL. User must be logged into Proxmox in the browser (PVEAuthCookie) for noVNC to work.
+// Console: API token → vncproxy (websocket=1) → vncticket + port → return Proxmox noVNC URL. No session, no WebSocket proxy. User must be logged into Proxmox in browser for noVNC to work.
 app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type) || 'qemu';
     const result = await proxmox.getVNCConsole(node, vmid, type);
+    if (!result?.url) {
+      return res.status(502).json({ error: 'Proxmox vncproxy did not return a console URL' });
+    }
     res.json({ success: true, url: result.url });
   } catch (err) {
     console.error('[Console]', err.message);

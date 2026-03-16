@@ -217,7 +217,8 @@ const Proxmox = () => {
         setSnackbar({ open: true, message: 'No console URL returned', severity: 'warning' });
       }
     } catch (err) {
-      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to get console', severity: 'error' });
+      const msg = err.response?.data?.error || err.message || 'Failed to get console URL';
+      setSnackbar({ open: true, message: msg, severity: 'error' });
     }
   };
 
