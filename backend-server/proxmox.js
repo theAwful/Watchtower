@@ -65,6 +65,51 @@ function toFormUrlEncoded(obj) {
     .join('&');
 }
 
+function normalizeTagList(tags) {
+  if (!tags) return [];
+  if (Array.isArray(tags)) {
+    return [...new Set(tags.map((t) => String(t || '').trim()).filter(Boolean))];
+  }
+  if (typeof tags === 'string') {
+    return [...new Set(tags.split(/[;,]/).map((t) => t.trim()).filter(Boolean))];
+  }
+  return [];
+}
+
+function parseProxmoxTags(tags) {
+  // Proxmox cluster/resources exposes tags as a semicolon-separated string.
+  return normalizeTagList(tags);
+}
+
+function toProxmoxTagsValue(tags) {
+  return normalizeTagList(tags).join(';');
+}
+
+async function setVMTags(node, vmid, type = 'qemu', tags = [], options = {}) {
+  const normalizedType = type === 'lxc' ? 'lxc' : 'qemu';
+  const tagsValue = toProxmoxTagsValue(tags);
+  if (!tagsValue) return;
+
+  const {
+    maxAttempts = 6,
+    delayMs = 2000,
+  } = options;
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await proxmoxRequest(`/nodes/${node}/${normalizedType}/${vmid}/config`, 'PUT', { tags: tagsValue });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError || new Error('Failed to set VM tags');
+}
+
 // Helper function to make Proxmox API requests
 // Proxmox API returns: { data: [...] } format
 // opts.useExtjs: use /api2/extjs/ base (required for clone on some Proxmox versions)
@@ -349,6 +394,7 @@ export async function getVMs() {
           uptime: typeof r.uptime === 'number' ? r.uptime : 0,
           disk: typeof r.disk === 'number' ? r.disk : 0,
           maxdisk: typeof r.maxdisk === 'number' ? r.maxdisk : 0,
+          tags: parseProxmoxTags(r.tags),
           ip: null,
         };
       })
@@ -617,6 +663,14 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
         // Don't fail the whole operation if pool assignment fails
       }
     }
+
+    if (config.tags) {
+      try {
+        await setVMTags(config.target || node, newVmid, vmType, config.tags, { maxAttempts: 8, delayMs: 2000 });
+      } catch (tagErr) {
+        console.warn(`Clone created but failed to set tags on ${vmType}/${newVmid}:`, tagErr.message);
+      }
+    }
     
     // Return success even if result is null (common for successful clone)
     return result || { success: true, vmid: parseInt(newVmid) };
@@ -717,6 +771,15 @@ export async function deployVM(node, vmid, config) {
       } catch (poolErr) {
         console.warn('VM created but failed to add to pool:', poolErr.message);
         // Don't fail the whole operation if pool assignment fails
+      }
+    }
+
+    // Apply tags after create so they are available for UI filtering.
+    if (config.tags) {
+      try {
+        await setVMTags(node, vmid, vmType, config.tags);
+      } catch (tagErr) {
+        console.warn(`VM created but failed to set tags on ${vmType}/${vmid}:`, tagErr.message);
       }
     }
     
@@ -906,7 +969,7 @@ export async function migrateVM(node, vmid, targetNode, type = 'qemu') {
 // Create VM by cloning a template. Always targets pve-node0. We don't rely on the clone
 // response (Proxmox creates the task on the backend); we just return the intended vmid/node/name.
 export async function createFromTemplate(config) {
-  const { templateVmid, templateNode, name, vmid, pool, full } = config;
+  const { templateVmid, templateNode, name, vmid, pool, full, tags } = config;
   if (!templateVmid || !templateNode) {
     throw new Error('templateVmid and templateNode are required');
   }
@@ -920,6 +983,7 @@ export async function createFromTemplate(config) {
     full: full === true,
     type: 'qemu',
     target: 'pve-node0',
+    tags: tags || undefined,
   };
   await cloneVM(templateNode, templateVmid, newVmid, cloneConfig);
   return { vmid: newVmid, node: 'pve-node0', name: cloneConfig.name };

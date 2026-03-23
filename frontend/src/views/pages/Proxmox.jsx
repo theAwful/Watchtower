@@ -41,6 +41,8 @@ import { copyToClipboard } from '../../utils/clipboardUtils';
 
 const STATUS_FILTER_ALL = 'all';
 const STATUS_FILTER_RUNNING = 'running';
+const STATUS_FILTER_ATTACK = 'attack';
+const ATTACK_MACHINE_TAG = 'attack-machine';
 const VM_POLL_INTERVAL_MS = 30000;
 
 const Proxmox = () => {
@@ -149,10 +151,17 @@ const Proxmox = () => {
     }
   }, [createDialogOpen]);
 
-  // Filter VMs by status then group by node
+  const hasAttackTag = (vm) => {
+    const tags = Array.isArray(vm?.tags) ? vm.tags : [];
+    return tags.some((tag) => String(tag).toLowerCase() === ATTACK_MACHINE_TAG);
+  };
+
+  // Filter VMs by selected view
   const filteredVms = statusFilter === STATUS_FILTER_RUNNING
     ? vms.filter((vm) => vm.status === 'running')
-    : vms;
+    : statusFilter === STATUS_FILTER_ATTACK
+      ? vms.filter(hasAttackTag)
+      : vms;
 
   const searchLower = searchQuery.trim().toLowerCase();
   const searchFilteredVms = searchLower
@@ -261,6 +270,7 @@ const Proxmox = () => {
         templateNode,
         templateVmid: parseInt(templateVmid, 10),
         name: vmName,
+        tags: [ATTACK_MACHINE_TAG],
       });
       const { name, node, vmid } = response.data;
       setSnackbar({
@@ -457,7 +467,7 @@ const Proxmox = () => {
             }}
           />
 
-          {/* Status filter: All vs Running */}
+          {/* Status filter */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
             <Typography variant="body2" color="text.secondary">
               Show:
@@ -477,6 +487,13 @@ const Proxmox = () => {
               >
                 Running only
               </Button>
+              <Button
+                size="small"
+                variant={statusFilter === STATUS_FILTER_ATTACK ? 'contained' : 'outlined'}
+                onClick={() => setStatusFilter(STATUS_FILTER_ATTACK)}
+              >
+                Attack machines
+              </Button>
             </Box>
           </Box>
 
@@ -490,6 +507,8 @@ const Proxmox = () => {
                   ? 'No VMs match your search'
                   : statusFilter === STATUS_FILTER_RUNNING
                     ? 'No running VMs'
+                    : statusFilter === STATUS_FILTER_ATTACK
+                      ? 'No attack machines found'
                     : 'No VMs found'}
               </Typography>
             </Paper>

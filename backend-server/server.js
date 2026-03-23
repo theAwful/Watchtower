@@ -21,6 +21,7 @@ const REQUEST_LOG_LEVEL = (process.env.REQUEST_LOG_LEVEL || 'changes').toLowerCa
 const MAX_LOG_FILE_SIZE_MB = parseInt(process.env.MAX_LOG_FILE_SIZE_MB || '10', 10);
 const MAX_LOG_FILE_SIZE_BYTES = Math.max(1, MAX_LOG_FILE_SIZE_MB) * 1024 * 1024;
 const LOG_MAX_ROLLOVERS = parseInt(process.env.LOG_MAX_ROLLOVERS || '5', 10);
+const ATTACK_MACHINE_TAG = (process.env.ATTACK_MACHINE_TAG || 'attack-machine').trim();
 
 if (!fs.existsSync(LOG_DIR)) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -81,6 +82,23 @@ function logError(event, error, details = {}) {
   };
   appendServerLog(payload);
   console.error(`[${event}]`, message);
+}
+
+function normalizeTags(tags) {
+  if (!tags) return [];
+  if (Array.isArray(tags)) {
+    return [...new Set(tags.map((t) => String(t || '').trim()).filter(Boolean))];
+  }
+  if (typeof tags === 'string') {
+    return [...new Set(tags.split(/[;,]/).map((t) => t.trim()).filter(Boolean))];
+  }
+  return [];
+}
+
+function withAttackMachineTag(tags) {
+  const merged = new Set(normalizeTags(tags));
+  if (ATTACK_MACHINE_TAG) merged.add(ATTACK_MACHINE_TAG);
+  return Array.from(merged);
 }
 
 // OpenVPN management interface configuration
@@ -509,7 +527,7 @@ app.get('/api/proxmox/next-vmid', async (req, res) => {
 // Create VM from template (clone on pve-node0; backend task runs async)
 app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
   try {
-    const { templateVmid, templateNode, name, vmid, pool, full } = req.body;
+    const { templateVmid, templateNode, name, vmid, pool, full, tags } = req.body;
     if (!templateVmid || !templateNode) {
       return res.status(400).json({
         error: 'templateVmid and templateNode are required',
@@ -522,6 +540,7 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
       vmid: vmid != null ? parseInt(vmid, 10) : undefined,
       pool: pool || undefined,
       full: full === true,
+      tags: withAttackMachineTag(tags),
     });
     logEvent('proxmox_vm_create_started', {
       templateNode,
@@ -615,7 +634,8 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
 
     // Check if this is a clone operation
     if (config?.cloneFrom) {
-      const result = await proxmox.cloneVM(node, config.cloneFrom, vmid, config);
+      const cloneConfig = { ...(config || {}), tags: withAttackMachineTag(config?.tags) };
+      const result = await proxmox.cloneVM(node, config.cloneFrom, vmid, cloneConfig);
       logEvent('proxmox_vm_clone_started', {
         node,
         sourceVmid: config.cloneFrom,
@@ -624,7 +644,8 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
       });
       res.json({ success: true, result });
     } else {
-      const result = await proxmox.deployVM(node, vmid, config || {});
+      const deployConfig = { ...(config || {}), tags: withAttackMachineTag(config?.tags) };
+      const result = await proxmox.deployVM(node, vmid, deployConfig);
       logEvent('proxmox_vm_deploy_started', {
         node,
         vmid,
