@@ -41,6 +41,7 @@ import { copyToClipboard } from '../../utils/clipboardUtils';
 
 const STATUS_FILTER_ALL = 'all';
 const STATUS_FILTER_RUNNING = 'running';
+const VM_POLL_INTERVAL_MS = 30000;
 
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
@@ -59,6 +60,7 @@ const Proxmox = () => {
   });
   const [vmTemplates, setVmTemplates] = useState([]);
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
 
   // Format bytes to human readable
   const formatBytes = (bytes) => {
@@ -122,10 +124,23 @@ const Proxmox = () => {
     fetchNodes();
   }, []);
 
-  // Auto-refresh every 10 seconds
+  // Auto-refresh only when tab is visible to reduce backend load.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      const visible = document.visibilityState === 'visible';
+      setIsPageVisible(visible);
+      if (visible) {
+        fetchVMs();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  // Auto-refresh every 30 seconds (visible tab only)
   useInterval(() => {
     fetchVMs();
-  }, 10000);
+  }, isPageVisible ? VM_POLL_INTERVAL_MS : null);
 
   // When Create VM dialog opens, fetch templates
   useEffect(() => {

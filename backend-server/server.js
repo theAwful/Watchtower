@@ -15,6 +15,73 @@ import * as proxmox from './proxmox.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = parseInt(process.env.PORT || '8080', 10);
+const LOG_DIR = process.env.LOG_DIR || path.resolve(__dirname, 'logs');
+const LOG_FILE_PATH = process.env.LOG_FILE_PATH || path.join(LOG_DIR, 'server-events.log');
+const REQUEST_LOG_LEVEL = (process.env.REQUEST_LOG_LEVEL || 'changes').toLowerCase();
+const MAX_LOG_FILE_SIZE_MB = parseInt(process.env.MAX_LOG_FILE_SIZE_MB || '10', 10);
+const MAX_LOG_FILE_SIZE_BYTES = Math.max(1, MAX_LOG_FILE_SIZE_MB) * 1024 * 1024;
+const LOG_MAX_ROLLOVERS = parseInt(process.env.LOG_MAX_ROLLOVERS || '5', 10);
+
+if (!fs.existsSync(LOG_DIR)) {
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+}
+
+function rotateLogFiles() {
+  try {
+    if (!fs.existsSync(LOG_FILE_PATH)) return;
+    const stats = fs.statSync(LOG_FILE_PATH);
+    if (!stats.isFile() || stats.size < MAX_LOG_FILE_SIZE_BYTES) return;
+
+    const maxRollovers = Math.max(1, LOG_MAX_ROLLOVERS);
+    const oldestPath = `${LOG_FILE_PATH}.${maxRollovers}`;
+    if (fs.existsSync(oldestPath)) {
+      fs.unlinkSync(oldestPath);
+    }
+
+    for (let i = maxRollovers - 1; i >= 1; i -= 1) {
+      const src = `${LOG_FILE_PATH}.${i}`;
+      const dest = `${LOG_FILE_PATH}.${i + 1}`;
+      if (fs.existsSync(src)) {
+        fs.renameSync(src, dest);
+      }
+    }
+
+    fs.renameSync(LOG_FILE_PATH, `${LOG_FILE_PATH}.1`);
+  } catch (err) {
+    console.error('Failed to rotate server log:', err.message);
+  }
+}
+
+function appendServerLog(entry) {
+  const line = `${JSON.stringify(entry)}\n`;
+  rotateLogFiles();
+  fs.appendFile(LOG_FILE_PATH, line, (err) => {
+    if (err) {
+      console.error('Failed to write server log:', err.message);
+    }
+  });
+}
+
+function logEvent(event, details = {}) {
+  const payload = { ts: new Date().toISOString(), level: 'info', event, ...details };
+  appendServerLog(payload);
+  if (REQUEST_LOG_LEVEL === 'verbose') {
+    console.log(`[${event}]`, details);
+  }
+}
+
+function logError(event, error, details = {}) {
+  const message = error?.message || String(error);
+  const payload = {
+    ts: new Date().toISOString(),
+    level: 'error',
+    event,
+    message,
+    ...details,
+  };
+  appendServerLog(payload);
+  console.error(`[${event}]`, message);
+}
 
 // OpenVPN management interface configuration
 const OPENVPN_HOST = process.env.OPENVPN_HOST || '192.168.68.66';
@@ -58,6 +125,21 @@ app.use('/api', (req, res, next) => {
   if (!req.session || !req.session.user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  next();
+});
+
+// Optional request logging (off by default; verbose only when explicitly enabled)
+app.use('/api', (req, res, next) => {
+  if (REQUEST_LOG_LEVEL !== 'verbose') return next();
+  const started = Date.now();
+  res.on('finish', () => {
+    logEvent('api_request', {
+      method: req.method,
+      path: req.originalUrl || req.url,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - started,
+    });
+  });
   next();
 });
 
@@ -372,13 +454,10 @@ app.get('/api/health', (req, res) => {
 // Get all VMs
 app.get('/api/proxmox/vms', async (req, res) => {
   try {
-    console.log('API request: GET /api/proxmox/vms');
     const vms = await proxmox.getVMs();
-    console.log(`Returning ${vms?.length || 0} VMs to client`);
     res.json({ vms: vms || [] });
   } catch (error) {
-    console.error('Error fetching Proxmox VMs:', error);
-    console.error('Error details:', error.message);
+    logError('proxmox_vms_fetch_failed', error);
     res.status(500).json({
       vms: [],
       error: error.message || 'Failed to fetch VMs',
@@ -444,9 +523,21 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
       pool: pool || undefined,
       full: full === true,
     });
+    logEvent('proxmox_vm_create_started', {
+      templateNode,
+      templateVmid: parseInt(templateVmid, 10),
+      vmid: result?.vmid,
+      node: result?.node,
+      name: result?.name || name || null,
+      user: req.session?.user?.username || null,
+    });
     res.json({ success: true, ...result });
   } catch (error) {
-    console.error('Error creating VM from template:', error);
+    logError('proxmox_vm_create_failed', error, {
+      templateNode: req.body?.templateNode || null,
+      templateVmid: req.body?.templateVmid || null,
+      user: req.session?.user?.username || null,
+    });
     res.status(500).json({
       error: error.message || 'Failed to create VM from template',
     });
@@ -516,9 +607,6 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
   try {
     const { node, vmid, config } = req.body;
 
-    console.log('API request: POST /api/proxmox/vms/deploy');
-    console.log('Request body:', { node, vmid, config });
-
     if (!node || !vmid) {
       return res.status(400).json({
         error: 'Missing required fields: node and vmid are required',
@@ -528,13 +616,29 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
     // Check if this is a clone operation
     if (config?.cloneFrom) {
       const result = await proxmox.cloneVM(node, config.cloneFrom, vmid, config);
+      logEvent('proxmox_vm_clone_started', {
+        node,
+        sourceVmid: config.cloneFrom,
+        vmid,
+        user: req.session?.user?.username || null,
+      });
       res.json({ success: true, result });
     } else {
       const result = await proxmox.deployVM(node, vmid, config || {});
+      logEvent('proxmox_vm_deploy_started', {
+        node,
+        vmid,
+        type: config?.type || 'qemu',
+        user: req.session?.user?.username || null,
+      });
       res.json({ success: true, result });
     }
   } catch (error) {
-    console.error('Error deploying VM:', error);
+    logError('proxmox_vm_deploy_failed', error, {
+      node: req.body?.node || null,
+      vmid: req.body?.vmid || null,
+      user: req.session?.user?.username || null,
+    });
     res.status(500).json({
       error: error.message || 'Failed to deploy VM',
     });
@@ -558,9 +662,20 @@ app.delete('/api/proxmox/vms/:node/:vmid', async (req, res) => {
     }
 
     const result = await proxmox.tearDownVM(node, vmid, type);
+    logEvent('proxmox_vm_deleted', {
+      node,
+      vmid,
+      type,
+      user: req.session?.user?.username || null,
+    });
     res.json({ success: true, result });
   } catch (error) {
-    console.error('Error tearing down VM:', error);
+    logError('proxmox_vm_delete_failed', error, {
+      node: req.params?.node || null,
+      vmid: req.params?.vmid || null,
+      type: req.query?.type || 'qemu',
+      user: req.session?.user?.username || null,
+    });
     const message = (error.message || '').toLowerCase();
     if (message.includes('running') || message.includes('stop the vm') || message.includes('must be stopped')) {
       return res.status(400).json({ error: 'VM must be stopped first' });
@@ -578,9 +693,20 @@ app.post('/api/proxmox/vms/:node/:vmid/start', async (req, res) => {
     const type = vmType(req.query.type);
     
     const result = await proxmox.startVM(node, vmid, type);
+    logEvent('proxmox_vm_start_requested', {
+      node,
+      vmid,
+      type,
+      user: req.session?.user?.username || null,
+    });
     res.json({ success: true, result });
   } catch (error) {
-    console.error('Error starting VM:', error);
+    logError('proxmox_vm_start_failed', error, {
+      node: req.params?.node || null,
+      vmid: req.params?.vmid || null,
+      type: req.query?.type || 'qemu',
+      user: req.session?.user?.username || null,
+    });
     res.status(500).json({
       error: error.message || 'Failed to start VM',
     });
@@ -594,9 +720,20 @@ app.post('/api/proxmox/vms/:node/:vmid/stop', async (req, res) => {
     const type = vmType(req.query.type);
     
     const result = await proxmox.stopVM(node, vmid, type);
+    logEvent('proxmox_vm_stop_requested', {
+      node,
+      vmid,
+      type,
+      user: req.session?.user?.username || null,
+    });
     res.json({ success: true, result });
   } catch (error) {
-    console.error('Error stopping VM:', error);
+    logError('proxmox_vm_stop_failed', error, {
+      node: req.params?.node || null,
+      vmid: req.params?.vmid || null,
+      type: req.query?.type || 'qemu',
+      user: req.session?.user?.username || null,
+    });
     res.status(500).json({
       error: error.message || 'Failed to stop VM',
     });
@@ -609,9 +746,20 @@ app.post('/api/proxmox/vms/:node/:vmid/restart', async (req, res) => {
     const type = vmType(req.query.type);
     
     const result = await proxmox.rebootVM(node, vmid, type);
+    logEvent('proxmox_vm_restart_requested', {
+      node,
+      vmid,
+      type,
+      user: req.session?.user?.username || null,
+    });
     res.json({ success: true, result });
   } catch (error) {
-    console.error('Error restarting VM:', error);
+    logError('proxmox_vm_restart_failed', error, {
+      node: req.params?.node || null,
+      vmid: req.params?.vmid || null,
+      type: req.query?.type || 'qemu',
+      user: req.session?.user?.username || null,
+    });
     res.status(500).json({
       error: error.message || 'Failed to restart VM',
     });
@@ -690,13 +838,18 @@ app.put('/api/proxmox/pools/:poolid', async (req, res) => {
     const { poolid } = req.params;
     const { vms } = req.body;
     
-    console.log(`API request: PUT /api/proxmox/pools/${poolid}`);
-    console.log(`VMs: ${vms}`);
-    
     const result = await proxmox.updatePool(poolid, vms);
+    logEvent('proxmox_pool_updated', {
+      poolid,
+      vmCount: typeof vms === 'string' && vms.trim() ? vms.split(',').length : 0,
+      user: req.session?.user?.username || null,
+    });
     res.json({ success: true, result });
   } catch (error) {
-    console.error('Error updating pool:', error);
+    logError('proxmox_pool_update_failed', error, {
+      poolid: req.params?.poolid || null,
+      user: req.session?.user?.username || null,
+    });
     res.status(500).json({
       error: error.message || 'Failed to update pool',
     });
@@ -709,9 +862,6 @@ app.put('/api/proxmox/vms/:node/:vmid/pool', async (req, res) => {
     const { node, vmid } = req.params;
     const { type, poolid } = req.body;
 
-    console.log(`API request: PUT /api/proxmox/vms/${node}/${vmid}/pool`);
-    console.log(`Request body:`, { type, poolid });
-
     if (!poolid) {
       return res.status(400).json({
         error: 'Missing required field: poolid',
@@ -719,10 +869,20 @@ app.put('/api/proxmox/vms/:node/:vmid/pool', async (req, res) => {
     }
 
     const result = await proxmox.updateVMPool(vmid, type || 'qemu', poolid, node);
+    logEvent('proxmox_vm_pool_updated', {
+      node,
+      vmid,
+      type: type || 'qemu',
+      poolid,
+      user: req.session?.user?.username || null,
+    });
     res.json({ success: true, result });
   } catch (error) {
-    console.error('Error updating VM pool:', error);
-    console.error('Error stack:', error.stack);
+    logError('proxmox_vm_pool_update_failed', error, {
+      node: req.params?.node || null,
+      vmid: req.params?.vmid || null,
+      user: req.session?.user?.username || null,
+    });
     res.status(500).json({
       error: error.message || 'Failed to update VM pool',
     });
@@ -781,6 +941,8 @@ const onListen = () => {
   if (process.env.PROXMOX_HOST) {
     console.log(`Proxmox API: ${process.env.PROXMOX_HOST}:${process.env.PROXMOX_PORT || 8006}`);
   }
+  console.log(`Server event log file: ${LOG_FILE_PATH}`);
+  console.log(`Log rotation: ${MAX_LOG_FILE_SIZE_MB}MB x ${Math.max(1, LOG_MAX_ROLLOVERS)} files`);
 };
 
 server.listen(PORT, onListen);

@@ -3,8 +3,40 @@
 import https from 'https';
 import { URL } from 'url';
 
-const PROXMOX_HOST = process.env.PROXMOX_HOST || 'localhost';
-const PROXMOX_PORT = parseInt(process.env.PROXMOX_PORT || '8006', 10);
+function parseProxmoxEndpoint() {
+  const rawHost = (process.env.PROXMOX_HOST || 'localhost').trim();
+  const rawPort = parseInt(process.env.PROXMOX_PORT || '8006', 10);
+
+  // Accept either:
+  // - PROXMOX_HOST=172.22.9.10
+  // - PROXMOX_HOST=https://172.22.9.10:8006
+  // and normalize to hostname + port.
+  if (/^https?:\/\//i.test(rawHost)) {
+    try {
+      const parsed = new URL(rawHost);
+      return {
+        host: parsed.hostname || 'localhost',
+        port: parsed.port ? parseInt(parsed.port, 10) : rawPort,
+      };
+    } catch {
+      // Fall through to simple parsing if URL constructor fails.
+    }
+  }
+
+  const hostNoPath = rawHost.split('/')[0];
+  const hostAndPort = hostNoPath.split(':');
+  if (hostAndPort.length === 2 && hostAndPort[1]) {
+    const parsedPort = parseInt(hostAndPort[1], 10);
+    return {
+      host: hostAndPort[0] || 'localhost',
+      port: Number.isFinite(parsedPort) ? parsedPort : rawPort,
+    };
+  }
+
+  return { host: hostNoPath || 'localhost', port: rawPort };
+}
+
+const { host: PROXMOX_HOST, port: PROXMOX_PORT } = parseProxmoxEndpoint();
 const PROXMOX_TOKEN_ID = process.env.PROXMOX_TOKEN_ID || '';
 const PROXMOX_TOKEN_SECRET = process.env.PROXMOX_TOKEN_SECRET || '';
 const PROXMOX_USER = process.env.PROXMOX_USER || 'root';
