@@ -1,6 +1,6 @@
 # Watchtower Frontend
 
-React + Vite + Material UI. Single main page: **Proxmox VM Management** (list VMs, start/stop/restart, create from template, noVNC, search/filter).
+React + Vite + Material UI. Single main page: **Proxmox VM Management** (list VMs, start/stop/restart, create from template, search/filter).
 
 ## Dev
 

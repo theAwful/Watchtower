@@ -232,11 +232,13 @@ Watchtower does not delete VMs. Use the Proxmox UI or API as an administrator.
 }
 ```
 
-### Get VNC Console URL
+### Get console URL (noVNC)
 
-Get a VNC console URL for accessing a VM's console. The URL includes a ticket so the user can open the console without being logged into Proxmox in the browser, **if** `PROXMOX_PASSWORD` is set in the environment (same user as `PROXMOX_USER`).
+> **v1 UI:** Watchtower does not show a console button; this endpoint remains for API clients or a future UI.
 
-**Endpoint**: `GET /api/proxmox/vms/:node/:vmid/vnc`
+Returns a Proxmox noVNC-style URL (API token → `vncproxy`). Behavior depends on Proxmox and auth setup.
+
+**Endpoint**: `GET /api/proxmox/vms/:node/:vmid/console`
 
 **Parameters**:
 - `node` (path): Proxmox node name
@@ -246,7 +248,8 @@ Get a VNC console URL for accessing a VM's console. The URL includes a ticket so
 **Response**:
 ```json
 {
-  "url": "https://proxmox-host:8006/?console=kvm&novnc=1&vmid=100&node=proxmox-node1&resize=1&vncticket=..."
+  "success": true,
+  "url": "https://proxmox-host:8006/?console=kvm&novnc=1&vmid=100&node=proxmox-node1&resize=off&vncticket=..."
 }
 ```
 
@@ -374,7 +377,7 @@ The backend requires the following environment variables:
 - `PROXMOX_REALM`: Authentication realm (default: pam)
 - `PROXMOX_TOKEN_ID`: API token ID
 - `PROXMOX_TOKEN_SECRET`: API token secret
-- `PROXMOX_PASSWORD`: (optional) Password for same user; required for noVNC when users are not logged into Proxmox in the browser
+- `PROXMOX_PASSWORD`: (optional) Password for same user; used for Proxmox session flows (e.g. `/api/proxmox/set-session`); may help console URLs in some setups
 - `WATCHTOWER_PROXMOX_POOL`: (optional) Proxmox pool id; default `VM-Operators_Pool`. Limits Watchtower VM list and actions to that pool.
 - `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL`: (optional) Set to `1` to disable pool filtering.
 - `WATCHTOWER_PLACEMENT_TIE_DELTA`: (optional) Width of the load-score band for round-robin among tied nodes when creating VMs from templates (default `0.08`).

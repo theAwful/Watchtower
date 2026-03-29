@@ -8,7 +8,6 @@ The main Watchtower page: view and manage Proxmox VMs and containers from a sing
 - **Filters** – “Running only” (default) or “All”; search by name, VMID, or IP.
 - **Create VM from template** – Clone a template (e.g. `tmpl-Kali`, `tmpl-Win11`) with auto VMID; the backend picks a target node using **load balancing** (free memory + CPU headroom), with **round-robin** among nodes in a close score band.
 - **Power actions** – Start, Restart, Stop per VM.
-- **noVNC** – Open a web console in a new tab (VM must be running).
 - **IP** – Guest IP when QEMU agent is available; click to copy.
 
 ## VM table
@@ -24,7 +23,7 @@ Each VM row shows:
 | Memory   | Used / max                            |
 | Uptime   | Time running                          |
 | IP       | Guest IP (if agent present); click to copy |
-| Actions  | Start, Restart, Stop, noVNC  |
+| Actions  | Start, Restart, Stop  |
 
 ## Create VM from template
 
@@ -48,9 +47,7 @@ The backend starts a clone from the template’s node with `target` set to the c
 - `POST /api/proxmox/vms/:node/:vmid/start` – Start
 - `POST /api/proxmox/vms/:node/:vmid/stop` – Stop
 - `POST /api/proxmox/vms/:node/:vmid/restart` – Restart
-- `GET /api/proxmox/vms/:node/:vmid/console` – Console URL
-
-VM deletion is not available in Watchtower; use Proxmox as an admin.
+VM deletion and in-browser console (noVNC) are not in the v1 UI; use Proxmox as an admin if needed. The backend may still expose a console URL route for future use.
 
 ## Configuration
 
@@ -58,7 +55,7 @@ Proxmox is configured via environment variables (see [README](../../README.md) a
 
 - `PROXMOX_HOST`, `PROXMOX_PORT`, `PROXMOX_USER`, `PROXMOX_REALM`
 - `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`
-- `PROXMOX_PASSWORD` (optional) – Password for the same user; **required for noVNC** when users are not logged into the Proxmox UI in their browser. The server uses it to obtain a console ticket.
+- `PROXMOX_PASSWORD` (optional) – Password for the same user; used by server-side flows that log into Proxmox (e.g. session cookie / future console support).
 
 Create the token in Proxmox: **Datacenter → Permissions → API Tokens**. The token needs at least VM and node read, and VM power/clone where you use those features (delete is not exposed in Watchtower).
 
@@ -67,4 +64,3 @@ Create the token in Proxmox: **Datacenter → Permissions → API Tokens**. The 
 - **VMs not loading** – Check backend logs and Proxmox connectivity. Ensure the API token has permissions (e.g. VM.Audit, VM.Allocate).
 - **Create VM fails** – Use a template (e.g. name starting with `tmpl-` or marked template in Proxmox). Keep VM names DNS-friendly.
 - **No guest IP** – Install and enable the QEMU guest agent in the VM; IP is read from the agent.
-- **noVNC not opening / 401 No ticket** – Set `PROXMOX_PASSWORD` in `.env` (same user as `PROXMOX_USER`) so the server can obtain a console ticket without requiring a Proxmox login in the browser. Ensure the VM is running and the browser allows pop-ups.

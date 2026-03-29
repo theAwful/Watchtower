@@ -30,7 +30,6 @@ import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
   RestartAlt as RestartIcon,
-  Computer as VNCIcon,
   Refresh as RefreshIcon,
   Add as AddIcon,
 } from '@mui/icons-material';
@@ -176,25 +175,6 @@ const Proxmox = () => {
       setTimeout(() => fetchVMs(), 2000);
     } catch (err) {
       setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to restart VM', severity: 'error' });
-    }
-  };
-
-  const handleVNC = async (vm) => {
-    try {
-      const type = vmType(vm);
-      const vmname = (vm.name && typeof vm.name === 'string') ? encodeURIComponent(vm.name) : '';
-      const apiUrl = `/api/proxmox/vms/${vm.node}/${vm.vmid}/console?type=${type}${vmname ? `&vmname=${vmname}` : ''}`;
-      const response = await api.get(apiUrl);
-      const consoleUrl = response.data?.url;
-      if (consoleUrl) {
-        window.open(consoleUrl, '_blank', 'noopener,noreferrer');
-        setSnackbar({ open: true, message: 'Console opened in new tab. Log into Proxmox in this browser first if it doesn’t load.', severity: 'info' });
-      } else {
-        setSnackbar({ open: true, message: 'No console URL returned', severity: 'warning' });
-      }
-    } catch (err) {
-      const msg = err.response?.data?.error || err.message || 'Failed to get console URL';
-      setSnackbar({ open: true, message: msg, severity: 'error' });
     }
   };
 
@@ -411,16 +391,6 @@ const Proxmox = () => {
                             color="warning"
                           >
                             <StopIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="VNC Console">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleVNC(vm)}
-                            disabled={vm.status !== 'running'}
-                            color="primary"
-                          >
-                            <VNCIcon />
                           </IconButton>
                         </Tooltip>
                       </Box>

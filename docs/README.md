@@ -4,7 +4,7 @@ Watchtower is a **Proxmox VM management** dashboard: one UI to list, start, stop
 
 ## Documentation
 
-- **[Proxmox VM Management](pages/proxmox.md)** – UI overview: VM list, filters, Create from template, noVNC, API usage
+- **[Proxmox VM Management](pages/proxmox.md)** – UI overview: VM list, filters, Create from template, API usage
 - **[Backend API Reference](api/backend-api.md)** – REST endpoints for Proxmox and health
 
 ## Getting started
