@@ -4,9 +4,9 @@ The main Watchtower page: view and manage Proxmox VMs and containers from a sing
 
 ## Overview
 
-- **VM list** – All QEMU and LXC VMs from every node, grouped by node.
-- **Filters** – “Running only” (default) or “All”; search by name, VMID, node, or IP.
-- **Create VM from template** – Clone a template (e.g. `tmpl-Kali`, `tmpl-Win11`) with auto VMID; new VMs are created on `pve-node0`.
+- **VM list** – QEMU and LXC VMs in a single table (operators pool when `WATCHTOWER_PROXMOX_POOL` is active).
+- **Filters** – “Running only” (default) or “All”; search by name, VMID, or IP.
+- **Create VM from template** – Clone a template (e.g. `tmpl-Kali`, `tmpl-Win11`) with auto VMID; the backend picks a target node using **load balancing** (free memory + CPU headroom), with **round-robin** among nodes in a close score band.
 - **Power actions** – Start, Restart, Stop per VM.
 - **noVNC** – Open a web console in a new tab (VM must be running).
 - **IP** – Guest IP when QEMU agent is available; click to copy.
@@ -24,9 +24,7 @@ Each VM row shows:
 | Memory   | Used / max                            |
 | Uptime   | Time running                          |
 | IP       | Guest IP (if agent present); click to copy |
-| Actions  | Start, Restart, Stop, noVNC, Delete  |
-
-Tables are grouped by **node** (e.g. `pve-node0`, `pve-node1`). There is no separate “Nodes” summary bar.
+| Actions  | Start, Restart, Stop, noVNC  |
 
 ## Create VM from template
 
@@ -35,11 +33,11 @@ Tables are grouped by **node** (e.g. `pve-node0`, `pve-node1`). There is no sepa
 3. Enter a **Name** (DNS-friendly: letters, numbers, hyphens; no spaces).
 4. Click **Create VM**.
 
-The backend starts a clone on the template’s node with `target=pve-node0`. Creation runs as a task on Proxmox; the list will update after a refresh. New VMs use the next free VMID.
+The backend starts a clone from the template’s node with `target` set to the chosen placement node. Creation runs as a task on Proxmox; the list will update after a refresh. New VMs use the next free VMID. The API response includes `node` (where the clone was placed) for follow-up calls such as `create-from-template/finalize` (`placedNode`).
 
 ## Search and filter
 
-- **Search** – Matches VM name, VMID, node, or IP as you type.
+- **Search** – Matches VM name, VMID, or IP as you type.
 - **Show** – “Running only” (default) or “All”.
 
 ## API used by this page

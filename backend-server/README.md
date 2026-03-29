@@ -31,6 +31,7 @@ Optional: `PORT`, `SSL_CERT_PATH`, `SSL_KEY_PATH` (HTTPS), `OPENVPN_*`.
 
 - `WATCHTOWER_PROXMOX_POOL` — Proxmox pool id; default `VM-Operators_Pool`. Watchtower lists and allows actions only on VMs whose pool membership matches (enforced in this app, not in Proxmox ACLs).
 - `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1` — Disable pool filtering (break-glass).
+- `WATCHTOWER_PLACEMENT_TIE_DELTA` — Optional; clone placement uses CPU/memory scores; nodes within this delta of the best score are round-robin’d (default `0.08`).
 
 ## Scripts
 

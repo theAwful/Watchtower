@@ -79,7 +79,7 @@ Retrieve a list of all virtual machines and containers from all Proxmox nodes.
 
 When `WATCHTOWER_PROXMOX_POOL` is active (default `VM-Operators_Pool`, unless `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1`), `vms` only includes guests in that pool, and `operatorsPool` echoes the pool id. Mutating endpoints return **403** if the target VM is not in that pool.
 
-Clone **templates** (for the Create VM flow) are listed without pool filtering—e.g. `tmpl-Kali` on `pve-node0` can live outside `VM-Operators_Pool`. New VMs from `POST /api/proxmox/vms/create-from-template` are still added to `VM-Operators_Pool` (or `WATCHTOWER_PROXMOX_POOL`).
+Clone **templates** (for the Create VM flow) are listed without pool filtering—e.g. `tmpl-Kali` on `pve-node0` can live outside `VM-Operators_Pool`. New VMs from `POST /api/proxmox/vms/create-from-template` are still added to `VM-Operators_Pool` (or `WATCHTOWER_PROXMOX_POOL`) and are **placed on an online node** chosen by load (memory + CPU) with round-robin among near-tied nodes. Optional env: `WATCHTOWER_PLACEMENT_TIE_DELTA` (default `0.08`) widens or narrows the tie band. For `POST /api/proxmox/vms/create-from-template/finalize`, send **`placedNode`** from the create response (or `templateNode` if the VM is still on that node) so pool checks and optional migration use the correct node.
 
 ### Get Proxmox Nodes
 
@@ -377,6 +377,7 @@ The backend requires the following environment variables:
 - `PROXMOX_PASSWORD`: (optional) Password for same user; required for noVNC when users are not logged into Proxmox in the browser
 - `WATCHTOWER_PROXMOX_POOL`: (optional) Proxmox pool id; default `VM-Operators_Pool`. Limits Watchtower VM list and actions to that pool.
 - `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL`: (optional) Set to `1` to disable pool filtering.
+- `WATCHTOWER_PLACEMENT_TIE_DELTA`: (optional) Width of the load-score band for round-robin among tied nodes when creating VMs from templates (default `0.08`).
 
 ### Server
 - `PORT`: Backend server port (default: 8080)

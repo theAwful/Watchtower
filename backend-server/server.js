@@ -593,7 +593,7 @@ app.get('/api/proxmox/next-vmid', async (req, res) => {
   }
 });
 
-// Create VM from template (clone on pve-node0; backend task runs async)
+// Create VM from template (clone to load-balanced target node; async on Proxmox)
 app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
   try {
     const { templateVmid, templateNode, name, vmid, full, tags } = req.body;
@@ -657,19 +657,25 @@ app.get('/api/proxmox/tasks/status', async (req, res) => {
 // Finalize VM creation after clone task completes (migrate if needed)
 app.post('/api/proxmox/vms/create-from-template/finalize', async (req, res) => {
   try {
-    const { templateNode, vmid, targetNode, name } = req.body;
-    if (!templateNode || vmid == null) {
+    const { templateNode, placedNode, vmid, targetNode, name } = req.body;
+    if (vmid == null) {
       return res.status(400).json({
-        error: 'templateNode and vmid are required',
+        error: 'vmid is required',
       });
     }
-    const access = await requireVmInOperatorsPool(res, templateNode, vmid, 'qemu');
+    const vmHostNode = placedNode || templateNode;
+    if (!vmHostNode) {
+      return res.status(400).json({
+        error: 'placedNode or templateNode is required (use placedNode from create-from-template response)',
+      });
+    }
+    const access = await requireVmInOperatorsPool(res, vmHostNode, vmid, 'qemu');
     if (!access.ok) return;
 
     const result = await proxmox.finalizeCreateFromTemplate({
-      templateNode,
+      vmNode: vmHostNode,
       vmid: parseInt(vmid, 10),
-      targetNode: targetNode || templateNode,
+      targetNode: targetNode || undefined,
       name: name || undefined,
     });
     res.json({ success: true, ...result });

@@ -4,10 +4,10 @@ Proxmox VM management dashboard. One app to view, control, and clone VMs across 
 
 ## Features
 
-- **VM list** – All QEMU/LXC VMs from all nodes, grouped by node
+- **VM list** – All QEMU/LXC VMs in one table (operators pool scope when configured)
 - **Start / Stop / Restart** – Power controls per VM
-- **Create VM from template** – Clone from a template (e.g. `tmpl-Kali`, `tmpl-Win11`) with auto VMID; new VMs land on `pve-node0`
-- **Search & filter** – Search by name, VMID, node, or IP; filter by “Running only” or “All”
+- **Create VM from template** – Clone from a template (e.g. `tmpl-Kali`, `tmpl-Win11`) with auto VMID; placement is **load-balanced** across online nodes (CPU/memory), with round-robin among near-ties
+- **Search & filter** – Search by name, VMID, or IP; filter by “Running only” or “All”
 - **IP column** – Guest IP (when QEMU agent is available), click to copy
 - **noVNC console** – Open a web console in a new tab
 - **HTTPS** – Optional SSL so you can use `https://<ip>:<port>`

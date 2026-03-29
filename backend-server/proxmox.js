@@ -603,12 +603,13 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
   try {
     const vmType = config.type || 'qemu';
     const endpoint = `/nodes/${node}/${vmType}/${sourceVmid}/clone`;
-    // Required: newid, name, target (pve-node0). Omit full for linked clone.
+    // Required: newid, name, target (destination node). Omit full for linked clone.
     const cloneConfig = {
       newid: parseInt(newVmid),
       name: config.name || `Clone of VM ${sourceVmid}`,
       target: config.target || node,
     };
+    const destNode = cloneConfig.target;
     if (config.full === true) {
       cloneConfig.full = 1;
     }
@@ -636,7 +637,7 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
         console.warn('Received non-JSON response, but this might indicate successful clone');
         // Try to verify clone was created by checking if it exists
         try {
-          const vmStatus = await proxmoxRequest(`/nodes/${node}/${vmType}/${newVmid}/status/current`);
+          const vmStatus = await proxmoxRequest(`/nodes/${destNode}/${vmType}/${newVmid}/status/current`);
           if (vmStatus) {
             console.log('Clone appears to have been created successfully (verified by status check)');
             result = { success: true, vmid: parseInt(newVmid) };
@@ -655,7 +656,7 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
     // If pool was specified, add VM to pool after cloning
     if (config.pool) {
       try {
-        await updateVMPool(newVmid, vmType, config.pool, node);
+        await updateVMPool(newVmid, vmType, config.pool, destNode);
         console.log(`Clone added to pool: ${config.pool}`);
       } catch (poolErr) {
         console.warn('Clone created but failed to add to pool:', poolErr.message);
@@ -665,7 +666,7 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
 
     if (config.tags) {
       try {
-        await setVMTags(config.target || node, newVmid, vmType, config.tags, { maxAttempts: 8, delayMs: 2000 });
+        await setVMTags(destNode, newVmid, vmType, config.tags, { maxAttempts: 8, delayMs: 2000 });
       } catch (tagErr) {
         console.warn(`Clone created but failed to set tags on ${vmType}/${newVmid}:`, tagErr.message);
       }
@@ -930,6 +931,40 @@ export async function getBestNodeForPlacement() {
   }
 }
 
+/** Nodes within this score delta of the best are treated as tied; round-robin picks among them. */
+const PLACEMENT_SCORE_TIE_DELTA = Math.max(
+  0,
+  parseFloat(process.env.WATCHTOWER_PLACEMENT_TIE_DELTA || '0.08') || 0.08,
+);
+
+let placementRoundRobinCounter = 0;
+
+/**
+ * Pick a node for a new clone: prefer more free RAM and lower CPU usage; among near-ties, round-robin for even spread.
+ */
+export async function selectBalancedPlacementNode() {
+  const nodes = await getNodes();
+  const online = (nodes || []).filter((n) => n.status === 'online');
+  if (online.length === 0) {
+    throw new Error('No online Proxmox nodes available for VM placement');
+  }
+  const scored = online.map((n) => ({ ...n, score: scoreNode(n) }));
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0].score;
+  let candidates = scored.filter((n) => n.score >= best - PLACEMENT_SCORE_TIE_DELTA);
+  if (candidates.length === 0) {
+    candidates = [scored[0]];
+  }
+  candidates.sort((a, b) => String(a.node).localeCompare(String(b.node)));
+  const idx = placementRoundRobinCounter % candidates.length;
+  placementRoundRobinCounter += 1;
+  const chosen = candidates[idx];
+  console.log(
+    `[Placement] ${chosen.node} (score=${chosen.score.toFixed(3)}, ${candidates.length} candidate(s) in tie band)`,
+  );
+  return chosen.node;
+}
+
 // Get status of a Proxmox task (UPID) - for polling from frontend
 // API: GET /api2/json/nodes/{node}/tasks/{upid}/status
 export async function getTaskStatus(node, upid) {
@@ -965,8 +1000,7 @@ export async function migrateVM(node, vmid, targetNode, type = 'qemu') {
   }
 }
 
-// Create VM by cloning a template. Always targets pve-node0. We don't rely on the clone
-// response (Proxmox creates the task on the backend); we just return the intended vmid/node/name.
+// Create VM by cloning a template onto a load-balanced target node (CPU/memory + round-robin ties).
 export async function createFromTemplate(config) {
   const { templateVmid, templateNode, name, vmid, pool, full, tags } = config;
   if (!templateVmid || !templateNode) {
@@ -976,26 +1010,33 @@ export async function createFromTemplate(config) {
   if (!newVmid) {
     throw new Error('Could not determine new VMID (provide vmid or ensure cluster/nextid works)');
   }
+  const targetNode = await selectBalancedPlacementNode();
   const cloneConfig = {
     name: name || `VM-${newVmid}`,
     pool: pool || undefined,
     full: full === true,
     type: 'qemu',
-    target: 'pve-node0',
+    target: targetNode,
     tags: tags || undefined,
   };
   await cloneVM(templateNode, templateVmid, newVmid, cloneConfig);
-  return { vmid: newVmid, node: 'pve-node0', name: cloneConfig.name };
+  return { vmid: newVmid, node: targetNode, name: cloneConfig.name };
 }
 
-// After clone task has completed, run migration if needed and return final VM info
-export async function finalizeCreateFromTemplate({ templateNode, vmid, targetNode, name }) {
-  let currentNode = templateNode;
-  if (targetNode && templateNode !== targetNode) {
-    await migrateVM(templateNode, vmid, targetNode, 'qemu');
-    currentNode = targetNode;
+// After clone task has completed, optionally migrate from the node where the VM was placed.
+// Pass placedNode (or legacy: templateNode when the VM is still on that node) as where the VM currently lives.
+export async function finalizeCreateFromTemplate({ vmNode, templateNode, vmid, targetNode, name }) {
+  const current = vmNode || templateNode;
+  if (!current) {
+    throw new Error('vmNode or templateNode is required');
   }
-  return { vmid: parseInt(vmid, 10), node: currentNode, name: name || `VM-${vmid}` };
+  const migrateTo = targetNode && targetNode !== current ? targetNode : null;
+  let nodeAfter = current;
+  if (migrateTo) {
+    await migrateVM(current, vmid, migrateTo, 'qemu');
+    nodeAfter = migrateTo;
+  }
+  return { vmid: parseInt(vmid, 10), node: nodeAfter, name: name || `VM-${vmid}` };
 }
 
 // Get storage pools
