@@ -30,7 +30,6 @@ import {
   PlayArrow as PlayIcon,
   Stop as StopIcon,
   RestartAlt as RestartIcon,
-  Delete as DeleteIcon,
   Computer as VNCIcon,
   Refresh as RefreshIcon,
   Add as AddIcon,
@@ -41,19 +40,14 @@ import { copyToClipboard } from '../../utils/clipboardUtils';
 
 const STATUS_FILTER_ALL = 'all';
 const STATUS_FILTER_RUNNING = 'running';
-const STATUS_FILTER_ATTACK = 'attack';
-const ATTACK_MACHINE_TAG = 'attack-machine';
 const VM_POLL_INTERVAL_MS = 30000;
 
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
-  const [nodes, setNodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [statusFilter, setStatusFilter] = useState(STATUS_FILTER_RUNNING); // default: running only
+  const [statusFilter, setStatusFilter] = useState(STATUS_FILTER_RUNNING);
   const [searchQuery, setSearchQuery] = useState('');
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [vmToDelete, setVmToDelete] = useState(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createConfig, setCreateConfig] = useState({
@@ -63,10 +57,8 @@ const Proxmox = () => {
   const [vmTemplates, setVmTemplates] = useState([]);
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
-  /** Set when backend restricts listing to a single Proxmox pool */
   const [operatorsPool, setOperatorsPool] = useState(null);
 
-  // Format bytes to human readable
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
     const k = 1024;
@@ -75,7 +67,6 @@ const Proxmox = () => {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
   };
 
-  // Format uptime
   const formatUptime = (seconds) => {
     if (!seconds || seconds === 0) return '0s';
     const days = Math.floor(seconds / 86400);
@@ -86,7 +77,6 @@ const Proxmox = () => {
     return `${minutes}m`;
   };
 
-  // Fetch VMs
   const fetchVMs = async (showLoading = false) => {
     try {
       if (showLoading) setLoading(true);
@@ -102,17 +92,6 @@ const Proxmox = () => {
     }
   };
 
-  // Fetch nodes
-  const fetchNodes = async () => {
-    try {
-      const response = await api.get('/api/proxmox/nodes');
-      setNodes(response.data.nodes || []);
-    } catch (err) {
-      console.error('Error fetching nodes:', err);
-    }
-  };
-
-  // Fetch QEMU VM templates (tmpl-Kali, tmpl-Win11, etc.) for Create VM dialog
   const fetchTemplates = async () => {
     try {
       const tplRes = await api.get('/api/proxmox/templates');
@@ -123,13 +102,10 @@ const Proxmox = () => {
     }
   };
 
-  // Initial load
   useEffect(() => {
     fetchVMs(true);
-    fetchNodes();
   }, []);
 
-  // Auto-refresh only when tab is visible to reduce backend load.
   useEffect(() => {
     const onVisibilityChange = () => {
       const visible = document.visibilityState === 'visible';
@@ -142,29 +118,19 @@ const Proxmox = () => {
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, []);
 
-  // Auto-refresh every 30 seconds (visible tab only)
   useInterval(() => {
     fetchVMs();
   }, isPageVisible ? VM_POLL_INTERVAL_MS : null);
 
-  // When Create VM dialog opens, fetch templates
   useEffect(() => {
     if (createDialogOpen) {
       fetchTemplates();
     }
   }, [createDialogOpen]);
 
-  const hasAttackTag = (vm) => {
-    const tags = Array.isArray(vm?.tags) ? vm.tags : [];
-    return tags.some((tag) => String(tag).toLowerCase() === ATTACK_MACHINE_TAG);
-  };
-
-  // Filter VMs by selected view
   const filteredVms = statusFilter === STATUS_FILTER_RUNNING
     ? vms.filter((vm) => vm.status === 'running')
-    : statusFilter === STATUS_FILTER_ATTACK
-      ? vms.filter(hasAttackTag)
-      : vms;
+    : vms;
 
   const searchLower = searchQuery.trim().toLowerCase();
   const searchFilteredVms = searchLower
@@ -172,24 +138,19 @@ const Proxmox = () => {
         (vm) =>
           (vm.name && vm.name.toLowerCase().includes(searchLower)) ||
           String(vm.vmid).includes(searchQuery.trim()) ||
-          (vm.node && vm.node.toLowerCase().includes(searchLower)) ||
-          (vm.ip && vm.ip.includes(searchQuery.trim()))
+          (vm.ip && vm.ip.includes(searchQuery.trim())),
       )
     : filteredVms;
 
-  const vmsByNode = () => {
-    const byNode = {};
-    searchFilteredVms.forEach((vm) => {
-      const n = vm.node || 'unknown';
-      if (!byNode[n]) byNode[n] = [];
-      byNode[n].push(vm);
-    });
-    return byNode;
-  };
+  const sortedVms = [...searchFilteredVms].sort((a, b) => {
+    const na = (a.name || '').toLowerCase();
+    const nb = (b.name || '').toLowerCase();
+    if (na !== nb) return na.localeCompare(nb);
+    return (a.vmid || 0) - (b.vmid || 0);
+  });
 
   const vmType = (vm) => (vm?.type === 'lxc' ? 'lxc' : 'qemu');
 
-  // VM Actions
   const handleStart = async (vm) => {
     try {
       await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/start?type=${vmType(vm)}`);
@@ -220,19 +181,6 @@ const Proxmox = () => {
     }
   };
 
-  const handleDelete = async () => {
-    if (!vmToDelete) return;
-    try {
-      await api.delete(`/api/proxmox/vms/${vmToDelete.node}/${vmToDelete.vmid}?type=${vmType(vmToDelete)}`);
-      setSnackbar({ open: true, message: `VM ${vmToDelete.name} deleted`, severity: 'success' });
-      setDeleteDialogOpen(false);
-      setVmToDelete(null);
-      setTimeout(() => fetchVMs(), 1000);
-    } catch (err) {
-      setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to delete VM', severity: 'error' });
-    }
-  };
-
   const handleVNC = async (vm) => {
     try {
       const type = vmType(vm);
@@ -252,10 +200,8 @@ const Proxmox = () => {
     }
   };
 
-  // VM name for clone: use base name only (Proxmox requires valid DNS-style name; date suffix was rejected)
   const getVmName = (baseName) => (baseName || '').trim() || 'VM';
 
-  // Create VM from template (clone on pve-node0; task runs on backend)
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
@@ -273,7 +219,6 @@ const Proxmox = () => {
         templateNode,
         templateVmid: parseInt(templateVmid, 10),
         name: vmName,
-        tags: [ATTACK_MACHINE_TAG],
       });
       const { name, node, vmid } = response.data;
       setSnackbar({
@@ -294,135 +239,6 @@ const Proxmox = () => {
       setCreateSubmitting(false);
     }
   };
-
-  // Render VM table for a single node
-  const renderVMTable = (vmList, nodeName) => (
-    <TableContainer component={Paper} sx={{ mb: 3 }}>
-      <Typography variant="h6" sx={{ p: 2, borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}>
-        {nodeName} ({vmList.length} VMs)
-      </Typography>
-      <Table>
-        <TableHead>
-          <TableRow>
-            <TableCell align="center" sx={{ textAlign: 'center' }}>VMID</TableCell>
-            <TableCell align="center" sx={{ textAlign: 'center' }}>Name</TableCell>
-            <TableCell align="center" sx={{ textAlign: 'center' }}>Status</TableCell>
-            <TableCell align="center" sx={{ textAlign: 'center' }}>CPU</TableCell>
-            <TableCell align="center" sx={{ textAlign: 'center' }}>Memory</TableCell>
-            <TableCell align="center" sx={{ textAlign: 'center' }}>Uptime</TableCell>
-            <TableCell align="center" sx={{ textAlign: 'center' }}>IP</TableCell>
-            <TableCell align="center" sx={{ textAlign: 'center' }}>Actions</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {vmList.map((vm) => (
-            <TableRow key={`${vm.node}-${vm.vmid}`} hover>
-              <TableCell align="center" sx={{ textAlign: 'center' }}>{vm.vmid}</TableCell>
-              <TableCell align="center" sx={{ textAlign: 'center' }}>{vm.name || `VM-${vm.vmid}`}</TableCell>
-              <TableCell align="center" sx={{ textAlign: 'center' }}>
-                <Chip
-                  label={vm.status || 'unknown'}
-                  color={vm.status === 'running' ? 'success' : vm.status === 'stopped' ? 'default' : 'warning'}
-                  size="small"
-                />
-              </TableCell>
-              <TableCell align="center" sx={{ textAlign: 'center' }}>{(vm.cpu * 100).toFixed(1)}%</TableCell>
-              <TableCell align="center" sx={{ textAlign: 'center' }}>
-                {formatBytes(vm.mem || 0)} / {formatBytes(vm.maxmem || 0)}
-              </TableCell>
-              <TableCell align="center" sx={{ textAlign: 'center' }}>{formatUptime(vm.uptime)}</TableCell>
-              <TableCell align="center" sx={{ fontFamily: 'inherit', fontSize: 'inherit', textAlign: 'center' }}>
-                {vm.ip ? (
-                  <Tooltip title="Click to copy">
-                    <Box
-                      component="span"
-                      onClick={async () => {
-                        const ok = await copyToClipboard(vm.ip);
-                        setSnackbar({
-                          open: true,
-                          message: ok ? `${vm.ip} copied to clipboard` : 'Failed to copy',
-                          severity: ok ? 'success' : 'warning',
-                        });
-                      }}
-                      sx={{
-                        cursor: 'pointer',
-                        '&:hover': { opacity: 0.8 },
-                      }}
-                    >
-                      {vm.ip}
-                    </Box>
-                  </Tooltip>
-                ) : (
-                  <Box component="span" sx={{ color: 'text.secondary' }}>
-                    —
-                  </Box>
-                )}
-              </TableCell>
-              <TableCell align="center" sx={{ textAlign: 'center' }}>
-                <Box component="span" sx={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: 0 }}>
-                <Tooltip title="Start">
-                  <IconButton
-                    size="small"
-                    onClick={() => handleStart(vm)}
-                    disabled={vm.status === 'running'}
-                    color="success"
-                  >
-                    <PlayIcon />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title="Restart">
-                  <IconButton
-                    size="small"
-                    onClick={() => handleRestart(vm)}
-                    disabled={vm.status !== 'running'}
-                    color="info"
-                  >
-                    <RestartIcon />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title="Stop">
-                  <IconButton
-                    size="small"
-                    onClick={() => handleStop(vm)}
-                    disabled={vm.status !== 'running'}
-                    color="warning"
-                  >
-                    <StopIcon />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title="VNC Console">
-                  <IconButton
-                    size="small"
-                    onClick={() => handleVNC(vm)}
-                    disabled={vm.status !== 'running'}
-                    color="primary"
-                  >
-                    <VNCIcon />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title="Delete">
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      setVmToDelete(vm);
-                      setDeleteDialogOpen(true);
-                    }}
-                    color="error"
-                  >
-                    <DeleteIcon />
-                  </IconButton>
-                </Tooltip>
-                </Box>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </TableContainer>
-  );
-
-  const byNode = vmsByNode();
-  const nodeNames = Object.keys(byNode).sort();
 
   return (
     <Box sx={{ width: '100%', maxWidth: '100%', p: { xs: 1, sm: 2, md: 3 }, boxSizing: 'border-box' }}>
@@ -457,11 +273,10 @@ const Proxmox = () => {
             </Alert>
           )}
 
-          {/* Search */}
           <TextField
             fullWidth
             size="small"
-            placeholder="Search by name, VMID, node, or IP..."
+            placeholder="Search by name, VMID, or IP..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             sx={{ mb: 2, maxWidth: 400 }}
@@ -476,7 +291,6 @@ const Proxmox = () => {
             </Typography>
           )}
 
-          {/* Status filter */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
             <Typography variant="body2" color="text.secondary">
               Show:
@@ -496,36 +310,134 @@ const Proxmox = () => {
               >
                 Running only
               </Button>
-              <Button
-                size="small"
-                variant={statusFilter === STATUS_FILTER_ATTACK ? 'contained' : 'outlined'}
-                onClick={() => setStatusFilter(STATUS_FILTER_ATTACK)}
-              >
-                Attack machines
-              </Button>
             </Box>
           </Box>
 
-          {/* VMs grouped by node */}
-          {nodeNames.map((nodeName) => renderVMTable(byNode[nodeName], nodeName))}
+          <TableContainer component={Paper} sx={{ mb: 3 }}>
+            <Typography variant="h6" sx={{ p: 2, borderBottom: '1px solid rgba(255, 255, 255, 0.12)' }}>
+              Virtual machines ({sortedVms.length})
+            </Typography>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell align="center" sx={{ textAlign: 'center' }}>VMID</TableCell>
+                  <TableCell align="center" sx={{ textAlign: 'center' }}>Name</TableCell>
+                  <TableCell align="center" sx={{ textAlign: 'center' }}>Status</TableCell>
+                  <TableCell align="center" sx={{ textAlign: 'center' }}>CPU</TableCell>
+                  <TableCell align="center" sx={{ textAlign: 'center' }}>Memory</TableCell>
+                  <TableCell align="center" sx={{ textAlign: 'center' }}>Uptime</TableCell>
+                  <TableCell align="center" sx={{ textAlign: 'center' }}>IP</TableCell>
+                  <TableCell align="center" sx={{ textAlign: 'center' }}>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {sortedVms.map((vm) => (
+                  <TableRow key={`${vm.node}-${vm.vmid}`} hover>
+                    <TableCell align="center" sx={{ textAlign: 'center' }}>{vm.vmid}</TableCell>
+                    <TableCell align="center" sx={{ textAlign: 'center' }}>{vm.name || `VM-${vm.vmid}`}</TableCell>
+                    <TableCell align="center" sx={{ textAlign: 'center' }}>
+                      <Chip
+                        label={vm.status || 'unknown'}
+                        color={vm.status === 'running' ? 'success' : vm.status === 'stopped' ? 'default' : 'warning'}
+                        size="small"
+                      />
+                    </TableCell>
+                    <TableCell align="center" sx={{ textAlign: 'center' }}>{(vm.cpu * 100).toFixed(1)}%</TableCell>
+                    <TableCell align="center" sx={{ textAlign: 'center' }}>
+                      {formatBytes(vm.mem || 0)} / {formatBytes(vm.maxmem || 0)}
+                    </TableCell>
+                    <TableCell align="center" sx={{ textAlign: 'center' }}>{formatUptime(vm.uptime)}</TableCell>
+                    <TableCell align="center" sx={{ fontFamily: 'inherit', fontSize: 'inherit', textAlign: 'center' }}>
+                      {vm.ip ? (
+                        <Tooltip title="Click to copy">
+                          <Box
+                            component="span"
+                            onClick={async () => {
+                              const ok = await copyToClipboard(vm.ip);
+                              setSnackbar({
+                                open: true,
+                                message: ok ? `${vm.ip} copied to clipboard` : 'Failed to copy',
+                                severity: ok ? 'success' : 'warning',
+                              });
+                            }}
+                            sx={{
+                              cursor: 'pointer',
+                              '&:hover': { opacity: 0.8 },
+                            }}
+                          >
+                            {vm.ip}
+                          </Box>
+                        </Tooltip>
+                      ) : (
+                        <Box component="span" sx={{ color: 'text.secondary' }}>
+                          —
+                        </Box>
+                      )}
+                    </TableCell>
+                    <TableCell align="center" sx={{ textAlign: 'center' }}>
+                      <Box component="span" sx={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: 0 }}>
+                        <Tooltip title="Start">
+                          <IconButton
+                            size="small"
+                            onClick={() => handleStart(vm)}
+                            disabled={vm.status === 'running'}
+                            color="success"
+                          >
+                            <PlayIcon />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Restart">
+                          <IconButton
+                            size="small"
+                            onClick={() => handleRestart(vm)}
+                            disabled={vm.status !== 'running'}
+                            color="info"
+                          >
+                            <RestartIcon />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Stop">
+                          <IconButton
+                            size="small"
+                            onClick={() => handleStop(vm)}
+                            disabled={vm.status !== 'running'}
+                            color="warning"
+                          >
+                            <StopIcon />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="VNC Console">
+                          <IconButton
+                            size="small"
+                            onClick={() => handleVNC(vm)}
+                            disabled={vm.status !== 'running'}
+                            color="primary"
+                          >
+                            <VNCIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
 
-          {searchFilteredVms.length === 0 && !loading && (
+          {sortedVms.length === 0 && !loading && (
             <Paper sx={{ p: 3, textAlign: 'center' }}>
               <Typography variant="body1" color="text.secondary">
                 {searchQuery.trim()
                   ? 'No VMs match your search'
                   : statusFilter === STATUS_FILTER_RUNNING
                     ? 'No running VMs'
-                    : statusFilter === STATUS_FILTER_ATTACK
-                      ? 'No attack machines found'
-                      : 'No VMs found'}
+                    : 'No VMs found'}
               </Typography>
             </Paper>
           )}
         </>
       )}
 
-      {/* Create VM from template dialog — node is chosen by load balancing */}
       <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Create VM from template</DialogTitle>
         <DialogContent>
@@ -561,7 +473,7 @@ const Proxmox = () => {
               </Typography>
             )}
             <Typography variant="caption" color="text.secondary">
-              The VM will be placed on the node with the most free resources (load-balanced).
+              New VMs are added to the operators pool ({operatorsPool || 'VM-Operators_Pool'}) and placed using your Proxmox layout.
             </Typography>
           </Box>
         </DialogContent>
@@ -577,24 +489,6 @@ const Proxmox = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialogOpen} onClose={() => setDeleteDialogOpen(false)}>
-        <DialogTitle>Delete VM</DialogTitle>
-        <DialogContent>
-          <Typography>
-            Are you sure you want to delete <strong>{vmToDelete?.name || `VM-${vmToDelete?.vmid}`}</strong>? This action
-            cannot be undone.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleDelete} variant="contained" color="error">
-            Delete
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Snackbar for notifications */}
       <Snackbar
         open={snackbar.open}
         autoHideDuration={4000}

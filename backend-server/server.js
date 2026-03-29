@@ -21,9 +21,8 @@ const REQUEST_LOG_LEVEL = (process.env.REQUEST_LOG_LEVEL || 'changes').toLowerCa
 const MAX_LOG_FILE_SIZE_MB = parseInt(process.env.MAX_LOG_FILE_SIZE_MB || '10', 10);
 const MAX_LOG_FILE_SIZE_BYTES = Math.max(1, MAX_LOG_FILE_SIZE_MB) * 1024 * 1024;
 const LOG_MAX_ROLLOVERS = parseInt(process.env.LOG_MAX_ROLLOVERS || '5', 10);
-const ATTACK_MACHINE_TAG = (process.env.ATTACK_MACHINE_TAG || 'attack-machine').trim();
 /** Proxmox pool id: Watchtower only lists/acts on VMs in this pool (service account still has full Proxmox access). */
-const WATCHTOWER_PROXMOX_POOL = (process.env.WATCHTOWER_PROXMOX_POOL || 'VM-Operators_Pool').trim();
+const WATCHTOWER_PROXMOX_POOL = (process.env.WATCHTOWER_PROXMOX_POOL || 'VM-Operators_Pool').trim() || 'VM-Operators_Pool';
 /** Set to 1 to disable pool filtering (break-glass / dev). */
 const WATCHTOWER_PROXMOX_POOL_ALLOW_ALL = process.env.WATCHTOWER_PROXMOX_POOL_ALLOW_ALL === '1';
 
@@ -97,12 +96,6 @@ function normalizeTags(tags) {
     return [...new Set(tags.split(/[;,]/).map((t) => t.trim()).filter(Boolean))];
   }
   return [];
-}
-
-function withAttackMachineTag(tags) {
-  const merged = new Set(normalizeTags(tags));
-  if (ATTACK_MACHINE_TAG) merged.add(ATTACK_MACHINE_TAG);
-  return Array.from(merged);
 }
 
 function proxmoxPoolRestrictionActive() {
@@ -614,7 +607,7 @@ app.get('/api/proxmox/next-vmid', async (req, res) => {
 // Create VM from template (clone on pve-node0; backend task runs async)
 app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
   try {
-    const { templateVmid, templateNode, name, vmid, pool, full, tags } = req.body;
+    const { templateVmid, templateNode, name, vmid, full, tags } = req.body;
     if (!templateVmid || !templateNode) {
       return res.status(400).json({
         error: 'templateVmid and templateNode are required',
@@ -623,18 +616,15 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
     const tplCheck = await requireTemplateInOperatorsPool(res, templateNode, templateVmid);
     if (!tplCheck.ok) return;
 
-    const effectivePool = proxmoxPoolRestrictionActive()
-      ? WATCHTOWER_PROXMOX_POOL
-      : (pool || undefined);
-
+    const extraTags = normalizeTags(tags);
     const result = await proxmox.createFromTemplate({
       templateVmid: parseInt(templateVmid, 10),
       templateNode,
       name: name || undefined,
       vmid: vmid != null ? parseInt(vmid, 10) : undefined,
-      pool: effectivePool,
+      pool: WATCHTOWER_PROXMOX_POOL,
       full: full === true,
-      tags: withAttackMachineTag(tags),
+      tags: extraTags.length ? extraTags : undefined,
     });
     logEvent('proxmox_vm_create_started', {
       templateNode,
@@ -735,9 +725,10 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
       const srcCheck = await requireVmInOperatorsPool(res, node, config.cloneFrom, srcType);
       if (!srcCheck.ok) return;
 
+      const deployTags = normalizeTags(config?.tags);
       const cloneConfig = {
         ...(config || {}),
-        tags: withAttackMachineTag(config?.tags),
+        tags: deployTags.length ? deployTags : undefined,
         pool: proxmoxPoolRestrictionActive() ? WATCHTOWER_PROXMOX_POOL : (config.pool || undefined),
       };
       const result = await proxmox.cloneVM(node, config.cloneFrom, vmid, cloneConfig);
@@ -749,9 +740,10 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
       });
       res.json({ success: true, result });
     } else {
+      const deployTags = normalizeTags(config?.tags);
       const deployConfig = {
         ...(config || {}),
-        tags: withAttackMachineTag(config?.tags),
+        tags: deployTags.length ? deployTags : undefined,
         pool: proxmoxPoolRestrictionActive()
           ? WATCHTOWER_PROXMOX_POOL
           : (config?.pool && config.pool !== 'unassigned' ? config.pool : undefined),
@@ -780,45 +772,9 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
 // Normalize VM type from query (avoid "undefined" string breaking Proxmox paths)
 const vmType = (t) => (t === 'lxc' ? 'lxc' : 'qemu');
 
-// Tear down (delete) a VM
-app.delete('/api/proxmox/vms/:node/:vmid', async (req, res) => {
-  try {
-    const { node, vmid } = req.params;
-    const type = vmType(req.query.type);
-
-    const access = await requireVmInOperatorsPool(res, node, vmid, type);
-    if (!access.ok) return;
-
-    const status = await proxmox.getVMStatus(node, vmid, type);
-    if (status && status.status === 'running') {
-      return res.status(400).json({
-        error: 'VM must be stopped first',
-      });
-    }
-
-    const result = await proxmox.tearDownVM(node, vmid, type);
-    logEvent('proxmox_vm_deleted', {
-      node,
-      vmid,
-      type,
-      user: req.session?.user?.username || null,
-    });
-    res.json({ success: true, result });
-  } catch (error) {
-    logError('proxmox_vm_delete_failed', error, {
-      node: req.params?.node || null,
-      vmid: req.params?.vmid || null,
-      type: req.query?.type || 'qemu',
-      user: req.session?.user?.username || null,
-    });
-    const message = (error.message || '').toLowerCase();
-    if (message.includes('running') || message.includes('stop the vm') || message.includes('must be stopped')) {
-      return res.status(400).json({ error: 'VM must be stopped first' });
-    }
-    res.status(500).json({
-      error: error.message || 'Failed to tear down VM',
-    });
-  }
+// VM deletion is disabled in Watchtower (use Proxmox UI / API as infra).
+app.delete('/api/proxmox/vms/:node/:vmid', (req, res) => {
+  res.status(403).json({ error: 'Deleting VMs from Watchtower is disabled. Use Proxmox as an administrator.' });
 });
 
 // Start a VM

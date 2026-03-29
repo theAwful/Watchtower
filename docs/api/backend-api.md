@@ -217,22 +217,16 @@ Stop a running virtual machine or container.
 }
 ```
 
-### Delete VM
+### Delete VM (disabled)
 
-Delete a virtual machine or container.
+Watchtower does not delete VMs. Use the Proxmox UI or API as an administrator.
 
 **Endpoint**: `DELETE /api/proxmox/vms/:node/:vmid`
 
-**Parameters**:
-- `node` (path): Proxmox node name
-- `vmid` (path): Virtual machine ID
-- `type` (query, optional): VM type, default "qemu"
-
-**Response**:
+**Response** (403):
 ```json
 {
-  "success": true,
-  "result": {}
+  "error": "Deleting VMs from Watchtower is disabled. Use Proxmox as an administrator."
 }
 ```
 
