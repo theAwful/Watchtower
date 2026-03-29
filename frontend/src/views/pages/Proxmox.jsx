@@ -57,7 +57,6 @@ const Proxmox = () => {
   const [vmTemplates, setVmTemplates] = useState([]);
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
-  const [operatorsPool, setOperatorsPool] = useState(null);
 
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
@@ -82,7 +81,6 @@ const Proxmox = () => {
       if (showLoading) setLoading(true);
       const response = await api.get('/api/proxmox/vms');
       setVms(response.data.vms || []);
-      setOperatorsPool(response.data.operatorsPool || null);
       setError(null);
     } catch (err) {
       console.error('Error fetching VMs:', err);
@@ -285,12 +283,6 @@ const Proxmox = () => {
             }}
           />
 
-          {operatorsPool && (
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              Showing VMs in Proxmox pool: <strong>{operatorsPool}</strong>
-            </Typography>
-          )}
-
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
             <Typography variant="body2" color="text.secondary">
               Show:
@@ -473,7 +465,7 @@ const Proxmox = () => {
               </Typography>
             )}
             <Typography variant="caption" color="text.secondary">
-              New VMs are added to the operators pool ({operatorsPool || 'VM-Operators_Pool'}) and placed using your Proxmox layout.
+              New VMs are added to the operators pool.
             </Typography>
           </Box>
         </DialogContent>
