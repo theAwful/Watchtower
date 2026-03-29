@@ -144,26 +144,16 @@ async function requireVmInOperatorsPool(res, node, vmid, type) {
   return { ok: true };
 }
 
-async function requireTemplateInOperatorsPool(res, templateNode, templateVmid) {
-  if (!proxmoxPoolRestrictionActive()) return { ok: true };
-  const vms = await proxmox.getVMs();
+/** Clone source must be a recognized QEMU template (same rules as GET /templates), not necessarily in VM-Operators_Pool. */
+async function requireRecognizedTemplate(res, templateNode, templateVmid) {
+  const templates = await proxmox.getTemplates();
   const id = parseInt(templateVmid, 10);
-  const vm = (vms || []).find(
-    (v) => v.node === templateNode && v.vmid === id && v.type === 'qemu',
+  const match = (templates || []).some(
+    (t) => t.node === templateNode && t.vmid === id,
   );
-  if (!vm) {
-    res.status(404).json({ error: 'Template VM not found' });
-    return { ok: false };
-  }
-  if (!isVmInOperatorsPool(vm)) {
-    logEvent('proxmox_pool_template_denied', {
-      templateNode,
-      templateVmid: id,
-      vmPool: vm.pool,
-      allowedPool: WATCHTOWER_PROXMOX_POOL,
-    });
-    res.status(403).json({
-      error: `Template is not in pool "${WATCHTOWER_PROXMOX_POOL}".`,
+  if (!match) {
+    res.status(400).json({
+      error: 'Not a recognized template VM (e.g. tmpl-Kali on pve-node0).',
     });
     return { ok: false };
   }
@@ -580,8 +570,7 @@ app.get('/api/proxmox/nodes', async (req, res) => {
 app.get('/api/proxmox/templates', async (req, res) => {
   try {
     const templates = await proxmox.getTemplates();
-    const filtered = filterVmsByOperatorsPool(templates || []);
-    res.json({ templates: filtered });
+    res.json({ templates: templates || [] });
   } catch (error) {
     console.error('Error fetching templates:', error);
     res.status(500).json({
@@ -613,7 +602,7 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
         error: 'templateVmid and templateNode are required',
       });
     }
-    const tplCheck = await requireTemplateInOperatorsPool(res, templateNode, templateVmid);
+    const tplCheck = await requireRecognizedTemplate(res, templateNode, templateVmid);
     if (!tplCheck.ok) return;
 
     const extraTags = normalizeTags(tags);

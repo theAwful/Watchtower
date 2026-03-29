@@ -45,7 +45,7 @@ The backend starts a clone on the template’s node with `target=pve-node0`. Cre
 ## API used by this page
 
 - `GET /api/proxmox/vms` – VMs in the configured operators pool (with guest IP when agent is available)
-- `GET /api/proxmox/templates` – Templates for the Create VM dropdown
+- `GET /api/proxmox/templates` – QEMU template VMs cluster-wide (e.g. `tmpl-Kali`, `tmpl-Win11` on `pve-node0`); not limited to the operators pool
 - `POST /api/proxmox/vms/create-from-template` – Clone from template; new VM is added to `VM-Operators_Pool` (or `WATCHTOWER_PROXMOX_POOL`)
 - `POST /api/proxmox/vms/:node/:vmid/start` – Start
 - `POST /api/proxmox/vms/:node/:vmid/stop` – Stop

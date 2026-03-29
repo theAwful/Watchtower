@@ -79,6 +79,8 @@ Retrieve a list of all virtual machines and containers from all Proxmox nodes.
 
 When `WATCHTOWER_PROXMOX_POOL` is active (default `VM-Operators_Pool`, unless `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1`), `vms` only includes guests in that pool, and `operatorsPool` echoes the pool id. Mutating endpoints return **403** if the target VM is not in that pool.
 
+Clone **templates** (for the Create VM flow) are listed without pool filtering—e.g. `tmpl-Kali` on `pve-node0` can live outside `VM-Operators_Pool`. New VMs from `POST /api/proxmox/vms/create-from-template` are still added to `VM-Operators_Pool` (or `WATCHTOWER_PROXMOX_POOL`).
+
 ### Get Proxmox Nodes
 
 Retrieve a list of all Proxmox nodes.
