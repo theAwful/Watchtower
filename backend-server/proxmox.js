@@ -240,9 +240,8 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null, opts = {}) 
           
           // Proxmox API returns { data: ... } (json) or { data: ..., success: 1 } (extjs)
           const result = parsed.data !== undefined ? parsed.data : parsed;
-          if (result === null && res.statusCode >= 200 && res.statusCode < 300) {
-            console.log(`[Proxmox] Parsed JSON but data was null: status=${res.statusCode} keys=${Object.keys(parsed).join(',')} raw=${trimmed.substring(0, 200)}`);
-          }
+          // Proxmox often returns {"data":null} for successful write operations (e.g. config updates/tags).
+          // Treat this as normal to avoid misleading "error-looking" logs.
           resolve(result);
         } catch (error) {
           console.error('Error processing response:', error);

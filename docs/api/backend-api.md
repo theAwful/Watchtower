@@ -72,9 +72,12 @@ Retrieve a list of all virtual machines and containers from all Proxmox nodes.
       "uptime": 86400,
       "pool": "production"
     }
-  ]
+  ],
+  "operatorsPool": "VM-Operators_Pool"
 }
 ```
+
+When `WATCHTOWER_PROXMOX_POOL` is active (default `VM-Operators_Pool`, unless `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1`), `vms` only includes guests in that pool, and `operatorsPool` echoes the pool id. Mutating endpoints return **403** if the target VM is not in that pool.
 
 ### Get Proxmox Nodes
 
@@ -376,6 +379,8 @@ The backend requires the following environment variables:
 - `PROXMOX_TOKEN_ID`: API token ID
 - `PROXMOX_TOKEN_SECRET`: API token secret
 - `PROXMOX_PASSWORD`: (optional) Password for same user; required for noVNC when users are not logged into Proxmox in the browser
+- `WATCHTOWER_PROXMOX_POOL`: (optional) Proxmox pool id; default `VM-Operators_Pool`. Limits Watchtower VM list and actions to that pool.
+- `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL`: (optional) Set to `1` to disable pool filtering.
 
 ### Server
 - `PORT`: Backend server port (default: 8080)

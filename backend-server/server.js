@@ -22,6 +22,10 @@ const MAX_LOG_FILE_SIZE_MB = parseInt(process.env.MAX_LOG_FILE_SIZE_MB || '10', 
 const MAX_LOG_FILE_SIZE_BYTES = Math.max(1, MAX_LOG_FILE_SIZE_MB) * 1024 * 1024;
 const LOG_MAX_ROLLOVERS = parseInt(process.env.LOG_MAX_ROLLOVERS || '5', 10);
 const ATTACK_MACHINE_TAG = (process.env.ATTACK_MACHINE_TAG || 'attack-machine').trim();
+/** Proxmox pool id: Watchtower only lists/acts on VMs in this pool (service account still has full Proxmox access). */
+const WATCHTOWER_PROXMOX_POOL = (process.env.WATCHTOWER_PROXMOX_POOL || 'VM-Operators_Pool').trim();
+/** Set to 1 to disable pool filtering (break-glass / dev). */
+const WATCHTOWER_PROXMOX_POOL_ALLOW_ALL = process.env.WATCHTOWER_PROXMOX_POOL_ALLOW_ALL === '1';
 
 if (!fs.existsSync(LOG_DIR)) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -99,6 +103,78 @@ function withAttackMachineTag(tags) {
   const merged = new Set(normalizeTags(tags));
   if (ATTACK_MACHINE_TAG) merged.add(ATTACK_MACHINE_TAG);
   return Array.from(merged);
+}
+
+function proxmoxPoolRestrictionActive() {
+  if (WATCHTOWER_PROXMOX_POOL_ALLOW_ALL) return false;
+  return WATCHTOWER_PROXMOX_POOL.length > 0;
+}
+
+function isVmInOperatorsPool(vm) {
+  if (!vm || vm.pool == null || vm.pool === '') return false;
+  return String(vm.pool) === WATCHTOWER_PROXMOX_POOL;
+}
+
+function filterVmsByOperatorsPool(vms) {
+  if (!proxmoxPoolRestrictionActive()) return vms || [];
+  return (vms || []).filter(isVmInOperatorsPool);
+}
+
+/**
+ * Ensure a VM exists and is in the operators pool. Uses full VM list (same source as pool labels).
+ * @returns {{ ok: true } | { ok: false }} — if ok is false, res was already sent
+ */
+async function requireVmInOperatorsPool(res, node, vmid, type) {
+  if (!proxmoxPoolRestrictionActive()) return { ok: true };
+  const vms = await proxmox.getVMs();
+  const id = parseInt(vmid, 10);
+  const vm = (vms || []).find(
+    (v) => v.node === node && v.vmid === id && v.type === type,
+  );
+  if (!vm) {
+    res.status(404).json({ error: 'VM not found' });
+    return { ok: false };
+  }
+  if (!isVmInOperatorsPool(vm)) {
+    logEvent('proxmox_pool_access_denied', {
+      node,
+      vmid: id,
+      type,
+      vmPool: vm.pool,
+      allowedPool: WATCHTOWER_PROXMOX_POOL,
+    });
+    res.status(403).json({
+      error: `This VM is not in pool "${WATCHTOWER_PROXMOX_POOL}".`,
+    });
+    return { ok: false };
+  }
+  return { ok: true };
+}
+
+async function requireTemplateInOperatorsPool(res, templateNode, templateVmid) {
+  if (!proxmoxPoolRestrictionActive()) return { ok: true };
+  const vms = await proxmox.getVMs();
+  const id = parseInt(templateVmid, 10);
+  const vm = (vms || []).find(
+    (v) => v.node === templateNode && v.vmid === id && v.type === 'qemu',
+  );
+  if (!vm) {
+    res.status(404).json({ error: 'Template VM not found' });
+    return { ok: false };
+  }
+  if (!isVmInOperatorsPool(vm)) {
+    logEvent('proxmox_pool_template_denied', {
+      templateNode,
+      templateVmid: id,
+      vmPool: vm.pool,
+      allowedPool: WATCHTOWER_PROXMOX_POOL,
+    });
+    res.status(403).json({
+      error: `Template is not in pool "${WATCHTOWER_PROXMOX_POOL}".`,
+    });
+    return { ok: false };
+  }
+  return { ok: true };
 }
 
 // OpenVPN management interface configuration
@@ -473,7 +549,12 @@ app.get('/api/health', (req, res) => {
 app.get('/api/proxmox/vms', async (req, res) => {
   try {
     const vms = await proxmox.getVMs();
-    res.json({ vms: vms || [] });
+    const filtered = filterVmsByOperatorsPool(vms);
+    const payload = { vms: filtered };
+    if (proxmoxPoolRestrictionActive()) {
+      payload.operatorsPool = WATCHTOWER_PROXMOX_POOL;
+    }
+    res.json(payload);
   } catch (error) {
     logError('proxmox_vms_fetch_failed', error);
     res.status(500).json({
@@ -486,7 +567,12 @@ app.get('/api/proxmox/vms', async (req, res) => {
 // Get Proxmox nodes
 app.get('/api/proxmox/nodes', async (req, res) => {
   try {
-    const nodes = await proxmox.getNodes();
+    let nodes = await proxmox.getNodes();
+    if (proxmoxPoolRestrictionActive()) {
+      const vms = filterVmsByOperatorsPool(await proxmox.getVMs());
+      const nodeNames = new Set(vms.map((v) => v.node).filter(Boolean));
+      nodes = (nodes || []).filter((n) => nodeNames.has(n.node));
+    }
     res.json({ nodes });
   } catch (error) {
     console.error('Error fetching Proxmox nodes:', error);
@@ -501,7 +587,8 @@ app.get('/api/proxmox/nodes', async (req, res) => {
 app.get('/api/proxmox/templates', async (req, res) => {
   try {
     const templates = await proxmox.getTemplates();
-    res.json({ templates: templates || [] });
+    const filtered = filterVmsByOperatorsPool(templates || []);
+    res.json({ templates: filtered });
   } catch (error) {
     console.error('Error fetching templates:', error);
     res.status(500).json({
@@ -533,12 +620,19 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
         error: 'templateVmid and templateNode are required',
       });
     }
+    const tplCheck = await requireTemplateInOperatorsPool(res, templateNode, templateVmid);
+    if (!tplCheck.ok) return;
+
+    const effectivePool = proxmoxPoolRestrictionActive()
+      ? WATCHTOWER_PROXMOX_POOL
+      : (pool || undefined);
+
     const result = await proxmox.createFromTemplate({
       templateVmid: parseInt(templateVmid, 10),
       templateNode,
       name: name || undefined,
       vmid: vmid != null ? parseInt(vmid, 10) : undefined,
-      pool: pool || undefined,
+      pool: effectivePool,
       full: full === true,
       tags: withAttackMachineTag(tags),
     });
@@ -590,6 +684,9 @@ app.post('/api/proxmox/vms/create-from-template/finalize', async (req, res) => {
         error: 'templateNode and vmid are required',
       });
     }
+    const access = await requireVmInOperatorsPool(res, templateNode, vmid, 'qemu');
+    if (!access.ok) return;
+
     const result = await proxmox.finalizeCreateFromTemplate({
       templateNode,
       vmid: parseInt(vmid, 10),
@@ -634,7 +731,15 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
 
     // Check if this is a clone operation
     if (config?.cloneFrom) {
-      const cloneConfig = { ...(config || {}), tags: withAttackMachineTag(config?.tags) };
+      const srcType = config?.type || 'qemu';
+      const srcCheck = await requireVmInOperatorsPool(res, node, config.cloneFrom, srcType);
+      if (!srcCheck.ok) return;
+
+      const cloneConfig = {
+        ...(config || {}),
+        tags: withAttackMachineTag(config?.tags),
+        pool: proxmoxPoolRestrictionActive() ? WATCHTOWER_PROXMOX_POOL : (config.pool || undefined),
+      };
       const result = await proxmox.cloneVM(node, config.cloneFrom, vmid, cloneConfig);
       logEvent('proxmox_vm_clone_started', {
         node,
@@ -644,7 +749,13 @@ app.post('/api/proxmox/vms/deploy', async (req, res) => {
       });
       res.json({ success: true, result });
     } else {
-      const deployConfig = { ...(config || {}), tags: withAttackMachineTag(config?.tags) };
+      const deployConfig = {
+        ...(config || {}),
+        tags: withAttackMachineTag(config?.tags),
+        pool: proxmoxPoolRestrictionActive()
+          ? WATCHTOWER_PROXMOX_POOL
+          : (config?.pool && config.pool !== 'unassigned' ? config.pool : undefined),
+      };
       const result = await proxmox.deployVM(node, vmid, deployConfig);
       logEvent('proxmox_vm_deploy_started', {
         node,
@@ -674,6 +785,9 @@ app.delete('/api/proxmox/vms/:node/:vmid', async (req, res) => {
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type);
+
+    const access = await requireVmInOperatorsPool(res, node, vmid, type);
+    if (!access.ok) return;
 
     const status = await proxmox.getVMStatus(node, vmid, type);
     if (status && status.status === 'running') {
@@ -712,7 +826,10 @@ app.post('/api/proxmox/vms/:node/:vmid/start', async (req, res) => {
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type);
-    
+
+    const access = await requireVmInOperatorsPool(res, node, vmid, type);
+    if (!access.ok) return;
+
     const result = await proxmox.startVM(node, vmid, type);
     logEvent('proxmox_vm_start_requested', {
       node,
@@ -739,7 +856,10 @@ app.post('/api/proxmox/vms/:node/:vmid/stop', async (req, res) => {
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type);
-    
+
+    const access = await requireVmInOperatorsPool(res, node, vmid, type);
+    if (!access.ok) return;
+
     const result = await proxmox.stopVM(node, vmid, type);
     logEvent('proxmox_vm_stop_requested', {
       node,
@@ -765,7 +885,10 @@ app.post('/api/proxmox/vms/:node/:vmid/restart', async (req, res) => {
   try {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type);
-    
+
+    const access = await requireVmInOperatorsPool(res, node, vmid, type);
+    if (!access.ok) return;
+
     const result = await proxmox.rebootVM(node, vmid, type);
     logEvent('proxmox_vm_restart_requested', {
       node,
@@ -813,6 +936,10 @@ app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
     const { node, vmid } = req.params;
     const type = vmType(req.query.type) || 'qemu';
     const vmname = (req.query.vmname && typeof req.query.vmname === 'string') ? req.query.vmname : '';
+
+    const access = await requireVmInOperatorsPool(res, node, vmid, type);
+    if (!access.ok) return;
+
     const result = await proxmox.getVNCConsole(node, vmid, type, vmname);
     if (!result?.url) {
       return res.status(502).json({ error: 'Proxmox vncproxy did not return a console URL' });
@@ -827,7 +954,10 @@ app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
 // Get storage pools
 app.get('/api/proxmox/pools', async (req, res) => {
   try {
-    const pools = await proxmox.getPools();
+    let pools = await proxmox.getPools();
+    if (proxmoxPoolRestrictionActive()) {
+      pools = (pools || []).filter((p) => (p.poolid || p) === WATCHTOWER_PROXMOX_POOL);
+    }
     res.json({ pools: pools || [] });
   } catch (error) {
     console.error('Error fetching pools:', error);
@@ -843,6 +973,9 @@ app.get('/api/proxmox/pools', async (req, res) => {
 app.get('/api/proxmox/pools/:poolid', async (req, res) => {
   try {
     const { poolid } = req.params;
+    if (proxmoxPoolRestrictionActive() && poolid !== WATCHTOWER_PROXMOX_POOL) {
+      return res.status(403).json({ error: 'Pool not accessible from Watchtower' });
+    }
     const poolInfo = await proxmox.getPoolVMs(poolid);
     res.json({ ...poolInfo });
   } catch (error) {
@@ -858,7 +991,11 @@ app.put('/api/proxmox/pools/:poolid', async (req, res) => {
   try {
     const { poolid } = req.params;
     const { vms } = req.body;
-    
+
+    if (proxmoxPoolRestrictionActive() && poolid !== WATCHTOWER_PROXMOX_POOL) {
+      return res.status(403).json({ error: 'Only the operators pool can be updated from Watchtower' });
+    }
+
     const result = await proxmox.updatePool(poolid, vms);
     logEvent('proxmox_pool_updated', {
       poolid,
@@ -888,6 +1025,15 @@ app.put('/api/proxmox/vms/:node/:vmid/pool', async (req, res) => {
         error: 'Missing required field: poolid',
       });
     }
+
+    if (proxmoxPoolRestrictionActive() && poolid !== WATCHTOWER_PROXMOX_POOL) {
+      return res.status(403).json({
+        error: `VMs can only be assigned to pool "${WATCHTOWER_PROXMOX_POOL}" from Watchtower`,
+      });
+    }
+
+    const access = await requireVmInOperatorsPool(res, node, vmid, type || 'qemu');
+    if (!access.ok) return;
 
     const result = await proxmox.updateVMPool(vmid, type || 'qemu', poolid, node);
     logEvent('proxmox_vm_pool_updated', {
@@ -961,6 +1107,11 @@ const onListen = () => {
   console.log(`OpenVPN Management Interface: ${OPENVPN_HOST}:${OPENVPN_PORT}`);
   if (process.env.PROXMOX_HOST) {
     console.log(`Proxmox API: ${process.env.PROXMOX_HOST}:${process.env.PROXMOX_PORT || 8006}`);
+  }
+  if (proxmoxPoolRestrictionActive()) {
+    console.log(`Proxmox operators pool (Watchtower scope): ${WATCHTOWER_PROXMOX_POOL}`);
+  } else if (WATCHTOWER_PROXMOX_POOL_ALLOW_ALL) {
+    console.log('Proxmox pool restriction: disabled (WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1)');
   }
   console.log(`Server event log file: ${LOG_FILE_PATH}`);
   console.log(`Log rotation: ${MAX_LOG_FILE_SIZE_MB}MB x ${Math.max(1, LOG_MAX_ROLLOVERS)} files`);

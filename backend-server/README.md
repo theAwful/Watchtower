@@ -27,6 +27,11 @@ See the root [.env.example](../.env.example). Required for Proxmox:
 
 Optional: `PORT`, `SSL_CERT_PATH`, `SSL_KEY_PATH` (HTTPS), `OPENVPN_*`.
 
+**Proxmox pool scope (recommended for operators):**
+
+- `WATCHTOWER_PROXMOX_POOL` — Proxmox pool id; default `VM-Operators_Pool`. Watchtower lists and allows actions only on VMs whose pool membership matches (enforced in this app, not in Proxmox ACLs).
+- `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1` — Disable pool filtering (break-glass).
+
 ## Scripts
 
 - `npm start` – Run server

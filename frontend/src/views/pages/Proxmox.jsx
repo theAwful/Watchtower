@@ -63,6 +63,8 @@ const Proxmox = () => {
   const [vmTemplates, setVmTemplates] = useState([]);
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
+  /** Set when backend restricts listing to a single Proxmox pool */
+  const [operatorsPool, setOperatorsPool] = useState(null);
 
   // Format bytes to human readable
   const formatBytes = (bytes) => {
@@ -90,6 +92,7 @@ const Proxmox = () => {
       if (showLoading) setLoading(true);
       const response = await api.get('/api/proxmox/vms');
       setVms(response.data.vms || []);
+      setOperatorsPool(response.data.operatorsPool || null);
       setError(null);
     } catch (err) {
       console.error('Error fetching VMs:', err);
@@ -467,8 +470,14 @@ const Proxmox = () => {
             }}
           />
 
+          {operatorsPool && (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Showing VMs in Proxmox pool: <strong>{operatorsPool}</strong>
+            </Typography>
+          )}
+
           {/* Status filter */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2, flexWrap: 'wrap' }}>
             <Typography variant="body2" color="text.secondary">
               Show:
             </Typography>
@@ -509,7 +518,7 @@ const Proxmox = () => {
                     ? 'No running VMs'
                     : statusFilter === STATUS_FILTER_ATTACK
                       ? 'No attack machines found'
-                    : 'No VMs found'}
+                      : 'No VMs found'}
               </Typography>
             </Paper>
           )}
