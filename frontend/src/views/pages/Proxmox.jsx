@@ -200,6 +200,21 @@ const Proxmox = () => {
 
   const getVmName = (baseName) => (baseName || '').trim() || 'VM';
 
+  /** Suffix for clone names: local calendar date, DNS-friendly (hyphens only). */
+  const formatCloneDateSuffix = () => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  /** Final VM name sent to Proxmox: user base + creation date. */
+  const buildVmNameForClone = (baseName) => {
+    const base = getVmName(baseName);
+    return `${base}-${formatCloneDateSuffix()}`;
+  };
+
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
@@ -210,7 +225,7 @@ const Proxmox = () => {
       setSnackbar({ open: true, message: 'Invalid template selection', severity: 'error' });
       return;
     }
-    const vmName = getVmName(createConfig.name);
+    const vmName = buildVmNameForClone(createConfig.name);
     try {
       setCreateSubmitting(true);
       const response = await api.post('/api/proxmox/vms/create-from-template', {
@@ -459,11 +474,10 @@ const Proxmox = () => {
               onChange={(e) => setCreateConfig({ ...createConfig, name: e.target.value })}
               placeholder="e.g. Kali-Hedy"
             />
-            {createConfig.name?.trim() && (
-              <Typography variant="caption" color="text.secondary">
-                VM will be named: <strong>{getVmName(createConfig.name)}</strong>
-              </Typography>
-            )}
+            <Typography variant="caption" color="text.secondary" display="block">
+              VM will be named: <strong>{buildVmNameForClone(createConfig.name)}</strong>
+              {' '}(today&apos;s date is appended automatically)
+            </Typography>
             <Typography variant="caption" color="text.secondary">
               New VMs are added to the operators pool.
             </Typography>
