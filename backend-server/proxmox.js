@@ -917,6 +917,10 @@ export async function getNodes() {
 // Known template VM names (clone sources)
 const TEMPLATE_NAME_PATTERN = /^tmpl-/i;
 const KNOWN_TEMPLATE_NAMES = ['tmpl-kali', 'tmpl-win11'];
+// Temporary per-node template VMID overrides for troubleshooting template discovery.
+const TEMPLATE_NODE_VMID_OVERRIDES = {
+  'pve-node2': { 'tmpl-kali': 134 },
+};
 
 function normalizeTemplateName(name) {
   return String(name || '').trim().toLowerCase();
@@ -947,6 +951,16 @@ export async function getTemplates() {
 async function findTemplateOnNodeByName(nodeName, templateName) {
   const wantedName = normalizeTemplateName(templateName);
   const targetNode = normalizeNodeName(nodeName);
+  const overrideVmid = TEMPLATE_NODE_VMID_OVERRIDES?.[targetNode]?.[wantedName];
+  if (overrideVmid) {
+    return {
+      vmid: parseInt(overrideVmid, 10),
+      node: nodeName,
+      name: templateName,
+      type: 'qemu',
+      template: true,
+    };
+  }
 
   // First pass: use cluster-wide templates list.
   const templates = await getTemplates();
