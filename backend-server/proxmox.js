@@ -628,14 +628,6 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
     if (config.storage) {
       cloneConfig.storage = config.storage;
     }
-    if (cloneConfig.full === 1 && !cloneConfig.storage) {
-      try {
-        // For reliable full clones, provide explicit destination storage on target node.
-        cloneConfig.storage = await getDefaultStorage(destNode);
-      } catch (storageErr) {
-        console.warn(`Could not auto-select storage for full clone on ${destNode}:`, storageErr.message);
-      }
-    }
     if (config.params) {
       Object.assign(cloneConfig, config.params);
     }
@@ -643,7 +635,7 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
     console.log(`\n=== Cloning VM ===`);
     console.log(`POST ${PROXMOX_BASE_URL_JSON}${endpoint}`);
     console.log(
-      `Body: newid=${cloneConfig.newid} name=${cloneConfig.name} target=${cloneConfig.target} full=${cloneConfig.full || 0} storage=${cloneConfig.storage || '(default)'}`,
+      `Body: newid=${cloneConfig.newid} name=${cloneConfig.name} target=${cloneConfig.target} full=${cloneConfig.full || 0}${cloneConfig.storage ? ` storage=${cloneConfig.storage}` : ''}`,
     );
     
     let result;
@@ -1072,7 +1064,6 @@ export async function createFromTemplate(config) {
     throw new Error('Could not determine new VMID (provide vmid or ensure cluster/nextid works)');
   }
   const targetNode = await selectBalancedPlacementNode();
-  const targetStorage = await getDefaultStorage(targetNode);
   const cloneConfig = {
     name: name || `VM-${newVmid}`,
     pool: pool || undefined,
@@ -1080,7 +1071,6 @@ export async function createFromTemplate(config) {
     full: true,
     type: 'qemu',
     target: targetNode,
-    storage: targetStorage || undefined,
     tags: tags || undefined,
   };
   await cloneVM(templateNode, templateVmid, newVmid, cloneConfig);
