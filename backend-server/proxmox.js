@@ -52,6 +52,14 @@ const PROXMOX_PUBLIC_URL = (process.env.PROXMOX_PUBLIC_URL || '').replace(/\/$/,
 // Base URLs for Proxmox API (extjs required for clone on some versions)
 const PROXMOX_BASE_URL_JSON = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/api2/json`;
 const PROXMOX_BASE_URL_EXTJS = `https://${PROXMOX_HOST}:${PROXMOX_PORT}/api2/extjs`;
+const PLACEMENT_MAX_CPU = Math.min(
+  1,
+  Math.max(0, parseFloat(process.env.WATCHTOWER_PLACEMENT_MAX_CPU || '0.9') || 0.9),
+);
+const PLACEMENT_MAX_MEM_UTIL = Math.min(
+  1,
+  Math.max(0, parseFloat(process.env.WATCHTOWER_PLACEMENT_MAX_MEM_UTIL || '0.9') || 0.9),
+);
 
 // Proxmox API expects application/x-www-form-urlencoded for POST/PUT, not JSON
 function toFormUrlEncoded(obj) {
@@ -610,7 +618,8 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
       target: config.target || node,
     };
     const destNode = cloneConfig.target;
-    if (config.full === true) {
+    // Default to full clones for safer independent VM lifecycles.
+    if (config.full !== false) {
       cloneConfig.full = 1;
     }
     if (config.pool) {
@@ -948,10 +957,23 @@ export async function selectBalancedPlacementNode() {
   if (online.length === 0) {
     throw new Error('No online Proxmox nodes available for VM placement');
   }
-  const scored = online.map((n) => ({ ...n, score: scoreNode(n) }));
+
+  const healthy = online.filter((n) => {
+    const cpu = Number.isFinite(n.cpu) ? n.cpu : 0;
+    const maxmem = Number.isFinite(n.maxmem) && n.maxmem > 0 ? n.maxmem : 1;
+    const mem = Number.isFinite(n.mem) ? n.mem : 0;
+    const memUtil = mem / maxmem;
+    return cpu <= PLACEMENT_MAX_CPU && memUtil <= PLACEMENT_MAX_MEM_UTIL;
+  });
+  const pool = healthy.length > 0 ? healthy : online;
+  const scored = pool.map((n) => ({ ...n, score: scoreNode(n) }));
   scored.sort((a, b) => b.score - a.score);
   const best = scored[0].score;
-  let candidates = scored.filter((n) => n.score >= best - PLACEMENT_SCORE_TIE_DELTA);
+  const worst = scored[scored.length - 1].score;
+  const spread = best - worst;
+  let candidates = spread <= PLACEMENT_SCORE_TIE_DELTA
+    ? scored
+    : scored.filter((n) => n.score >= best - PLACEMENT_SCORE_TIE_DELTA);
   if (candidates.length === 0) {
     candidates = [scored[0]];
   }
@@ -960,7 +982,7 @@ export async function selectBalancedPlacementNode() {
   placementRoundRobinCounter += 1;
   const chosen = candidates[idx];
   console.log(
-    `[Placement] ${chosen.node} (score=${chosen.score.toFixed(3)}, ${candidates.length} candidate(s) in tie band)`,
+    `[Placement] ${chosen.node} (score=${chosen.score.toFixed(3)}, candidates=${candidates.length}, healthy=${healthy.length}/${online.length}, spread=${spread.toFixed(3)})`,
   );
   return chosen.node;
 }
@@ -1014,7 +1036,7 @@ export async function createFromTemplate(config) {
   const cloneConfig = {
     name: name || `VM-${newVmid}`,
     pool: pool || undefined,
-    full: full === true,
+    full: full !== false,
     type: 'qemu',
     target: targetNode,
     tags: tags || undefined,
