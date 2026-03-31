@@ -347,10 +347,10 @@ const Proxmox = () => {
                       {formatBytes(vm.mem || 0)} / {formatBytes(vm.maxmem || 0)}
                     </TableCell>
                     <TableCell align="center" sx={{ textAlign: 'center' }}>{formatUptime(vm.uptime)}</TableCell>
-                    <TableCell align="center" sx={{ fontFamily: 'inherit', fontSize: 'inherit', textAlign: 'center' }}>
+                    <TableCell align="center" sx={{ textAlign: 'center' }}>
                       {vm.ip ? (
                         <Tooltip title="Click to copy">
-                          <Box
+                          <Typography
                             component="span"
                             onClick={async () => {
                               const ok = await copyToClipboard(vm.ip);
@@ -362,16 +362,25 @@ const Proxmox = () => {
                             }}
                             sx={{
                               cursor: 'pointer',
+                              display: 'inline',
+                              font: 'inherit',
+                              fontSize: 'inherit',
+                              lineHeight: 'inherit',
+                              letterSpacing: 'inherit',
                               '&:hover': { opacity: 0.8 },
                             }}
                           >
                             {vm.ip}
-                          </Box>
+                          </Typography>
                         </Tooltip>
                       ) : (
-                        <Box component="span" sx={{ color: 'text.secondary' }}>
+                        <Typography
+                          component="span"
+                          color="text.secondary"
+                          sx={{ display: 'inline', font: 'inherit', fontSize: 'inherit', lineHeight: 'inherit' }}
+                        >
                           —
-                        </Box>
+                        </Typography>
                       )}
                     </TableCell>
                     <TableCell align="center" sx={{ textAlign: 'center' }}>
