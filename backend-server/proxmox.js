@@ -60,6 +60,14 @@ const PLACEMENT_MAX_MEM_UTIL = Math.min(
   1,
   Math.max(0, parseFloat(process.env.WATCHTOWER_PLACEMENT_MAX_MEM_UTIL || '0.9') || 0.9),
 );
+const PLACEMENT_MAX_DISK_UTIL = Math.min(
+  1,
+  Math.max(0, parseFloat(process.env.WATCHTOWER_PLACEMENT_MAX_DISK_UTIL || '0.85') || 0.85),
+);
+const PLACEMENT_MIN_FREE_MEM_BYTES = Math.max(
+  0,
+  parseInt(process.env.WATCHTOWER_PLACEMENT_MIN_FREE_MEM_BYTES || '0', 10) || 0,
+);
 
 // Proxmox API expects application/x-www-form-urlencoded for POST/PUT, not JSON
 function toFormUrlEncoded(obj) {
@@ -495,19 +503,28 @@ export async function getStorages(node) {
 }
 
 // Get default storage for a node (first available storage that can hold VMs)
-export async function getDefaultStorage(node) {
+export async function getDefaultStorage(node, vmType = 'qemu') {
   try {
     const storages = await getStorages(node);
-    // Find first storage that can hold VM disks (content includes 'images')
+    const wantsQemuImages = vmType !== 'lxc';
+    // Pick active storage compatible with VM disks on this node.
     for (const storage of storages) {
       const content = storage.content || '';
-      if (content.includes('images') || content.includes('rootdir')) {
+      const enabled = storage.enabled == null || storage.enabled === 1 || storage.enabled === '1';
+      const active = storage.active == null || storage.active === 1 || storage.active === '1';
+      if (!enabled || !active) continue;
+      if (wantsQemuImages ? content.includes('images') : (content.includes('rootdir') || content.includes('images'))) {
         return storage.storage || storage;
       }
     }
-    // Fallback to first storage
+    // Fallback to first active/enabled storage
     if (storages.length > 0) {
-      return storages[0].storage || storages[0];
+      const fallback = storages.find((s) => {
+        const enabled = s.enabled == null || s.enabled === 1 || s.enabled === '1';
+        const active = s.active == null || s.active === 1 || s.active === '1';
+        return enabled && active;
+      }) || storages[0];
+      return fallback.storage || fallback;
     }
     return 'local'; // Default fallback
   } catch (error) {
@@ -885,6 +902,8 @@ export async function getNodes() {
           cpu: Number.isFinite(node.cpu) ? node.cpu : parseFloat(node.cpu) || 0,
           mem: Number.isFinite(node.mem) ? node.mem : parseFloat(node.mem) || 0,
           maxmem: Number.isFinite(node.maxmem) ? node.maxmem : parseFloat(node.maxmem) || 0,
+          disk: Number.isFinite(node.disk) ? node.disk : parseFloat(node.disk) || 0,
+          maxdisk: Number.isFinite(node.maxdisk) ? node.maxdisk : parseFloat(node.maxdisk) || 0,
           uptime: Number.isFinite(node.uptime) ? node.uptime : parseFloat(node.uptime) || 0,
         };
       })
@@ -899,10 +918,14 @@ export async function getNodes() {
 const TEMPLATE_NAME_PATTERN = /^tmpl-/i;
 const KNOWN_TEMPLATE_NAMES = ['tmpl-kali', 'tmpl-win11'];
 
+function normalizeTemplateName(name) {
+  return String(name || '').trim().toLowerCase();
+}
+
 function isTemplateVM(vm) {
   if (!vm || vm.type !== 'qemu') return false;
   if (vm.template === true) return true;
-  const name = (vm.name || '').toLowerCase().trim();
+  const name = normalizeTemplateName(vm.name);
   return TEMPLATE_NAME_PATTERN.test(name) || KNOWN_TEMPLATE_NAMES.includes(name);
 }
 
@@ -955,67 +978,97 @@ export async function getBestNodeForPlacement() {
   }
 }
 
-/** Nodes within this score delta of the best are treated as tied; round-robin picks among them. */
-const PLACEMENT_SCORE_TIE_DELTA = Math.max(
-  0,
-  parseFloat(process.env.WATCHTOWER_PLACEMENT_TIE_DELTA || '0.08') || 0.08,
-);
+let placementRoundRobinStartNode = '';
+let placementLock = Promise.resolve();
 
-let placementRoundRobinCounter = 0;
+function withPlacementLock(work) {
+  const next = placementLock.then(work, work);
+  placementLock = next.catch(() => {});
+  return next;
+}
+
+function getRoundRobinOrder(nodeNames) {
+  const names = [...new Set(nodeNames.map((n) => String(n || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  if (names.length === 0) return [];
+  const startIdx = placementRoundRobinStartNode ? names.indexOf(placementRoundRobinStartNode) : 0;
+  const base = startIdx >= 0 ? startIdx : 0;
+  const ordered = [];
+  for (let i = 0; i < names.length; i += 1) {
+    ordered.push(names[(base + i) % names.length]);
+  }
+  return ordered;
+}
+
+function advanceRoundRobinPointer(nodeNames, usedNode) {
+  const names = [...new Set(nodeNames.map((n) => String(n || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  if (names.length === 0) {
+    placementRoundRobinStartNode = '';
+    return;
+  }
+  const idx = names.indexOf(usedNode);
+  const nextIdx = idx >= 0 ? ((idx + 1) % names.length) : 0;
+  placementRoundRobinStartNode = names[nextIdx];
+}
+
+function buildPlacementMetrics(node) {
+  const cpu = Number.isFinite(node.cpu) ? node.cpu : 0;
+  const maxmem = Number.isFinite(node.maxmem) && node.maxmem > 0 ? node.maxmem : 1;
+  const mem = Number.isFinite(node.mem) ? node.mem : 0;
+  const maxdisk = Number.isFinite(node.maxdisk) && node.maxdisk > 0 ? node.maxdisk : 1;
+  const disk = Number.isFinite(node.disk) ? node.disk : 0;
+  const memUtil = mem / maxmem;
+  const diskUtil = disk / maxdisk;
+  const freeMem = Math.max(0, maxmem - mem);
+  const capacityOk = (
+    cpu <= PLACEMENT_MAX_CPU &&
+    memUtil <= PLACEMENT_MAX_MEM_UTIL &&
+    diskUtil <= PLACEMENT_MAX_DISK_UTIL &&
+    freeMem >= PLACEMENT_MIN_FREE_MEM_BYTES
+  );
+  return { ...node, cpu, memUtil, diskUtil, freeMem, capacityOk };
+}
 
 /**
  * Pick a node for a new clone: prefer more free RAM and lower CPU usage; among near-ties, round-robin for even spread.
  */
 export async function selectBalancedPlacementNode() {
-  const nodes = await getNodes();
-  const online = (nodes || []).filter((n) => n.status === 'online');
-  if (online.length === 0) {
-    throw new Error('No online Proxmox nodes available for VM placement');
-  }
+  return withPlacementLock(async () => {
+    const nodes = await getNodes();
+    const online = (nodes || []).filter((n) => n.status === 'online' && n.node);
+    if (online.length === 0) {
+      throw new Error('No online Proxmox nodes available for VM placement');
+    }
 
-  const metrics = online.map((n) => {
-    const cpu = Number.isFinite(n.cpu) ? n.cpu : 0;
-    const maxmem = Number.isFinite(n.maxmem) && n.maxmem > 0 ? n.maxmem : 1;
-    const mem = Number.isFinite(n.mem) ? n.mem : 0;
-    const memUtil = mem / maxmem;
-    const pressured = cpu > PLACEMENT_MAX_CPU || memUtil > PLACEMENT_MAX_MEM_UTIL;
-    return { ...n, cpu, memUtil, pressured };
-  });
-  const healthy = metrics.filter((n) => !n.pressured);
+    const byName = new Map(online.map((n) => [n.node, buildPlacementMetrics(n)]));
+    const order = getRoundRobinOrder(online.map((n) => n.node));
+    if (order.length === 0) {
+      throw new Error('No eligible Proxmox node names available for VM placement');
+    }
 
-  // Default behavior: if nodes are all healthy, rotate in strict round-robin.
-  if (healthy.length === online.length) {
-    const roundRobinNodes = [...healthy].sort((a, b) => String(a.node).localeCompare(String(b.node)));
-    const idx = placementRoundRobinCounter % roundRobinNodes.length;
-    placementRoundRobinCounter += 1;
-    const chosen = roundRobinNodes[idx];
-    console.log(
-      `[Placement] ${chosen.node} (mode=round_robin_healthy, candidates=${roundRobinNodes.length}/${online.length})`,
+    for (const nodeName of order) {
+      const node = byName.get(nodeName);
+      if (node && node.capacityOk) {
+        advanceRoundRobinPointer(order, nodeName);
+        console.log(
+          `[Placement] ${nodeName} (mode=best_fit_round_robin, next=${placementRoundRobinStartNode || '(reset)'}, cpu=${(node.cpu * 100).toFixed(1)}%, mem=${(node.memUtil * 100).toFixed(1)}%, disk=${(node.diskUtil * 100).toFixed(1)}%)`,
+        );
+        return nodeName;
+      }
+    }
+
+    const summary = order
+      .map((n) => {
+        const node = byName.get(n);
+        if (!node) return `${n}:missing`;
+        return `${n}:cpu=${(node.cpu * 100).toFixed(1)} mem=${(node.memUtil * 100).toFixed(1)} disk=${(node.diskUtil * 100).toFixed(1)} freeMem=${Math.round(node.freeMem / (1024 * 1024 * 1024))}GB`;
+      })
+      .join(' | ');
+    throw new Error(
+      `No Proxmox node has enough available capacity (thresholds cpu<=${Math.round(PLACEMENT_MAX_CPU * 100)}% mem<=${Math.round(PLACEMENT_MAX_MEM_UTIL * 100)}% disk<=${Math.round(PLACEMENT_MAX_DISK_UTIL * 100)}%, minFreeMemBytes=${PLACEMENT_MIN_FREE_MEM_BYTES}). ${summary}`,
     );
-    return chosen.node;
-  }
-
-  // Under pressure: keep placement resource-aware on healthy nodes if available.
-  const pool = healthy.length > 0 ? healthy : metrics;
-  const scored = pool.map((n) => ({ ...n, score: scoreNode(n) }));
-  scored.sort((a, b) => b.score - a.score);
-  const best = scored[0].score;
-  const worst = scored[scored.length - 1].score;
-  const spread = best - worst;
-  let candidates = spread <= PLACEMENT_SCORE_TIE_DELTA
-    ? scored
-    : scored.filter((n) => n.score >= best - PLACEMENT_SCORE_TIE_DELTA);
-  if (candidates.length === 0) {
-    candidates = [scored[0]];
-  }
-  candidates.sort((a, b) => String(a.node).localeCompare(String(b.node)));
-  const idx = placementRoundRobinCounter % candidates.length;
-  placementRoundRobinCounter += 1;
-  const chosen = candidates[idx];
-  console.log(
-    `[Placement] ${chosen.node} (mode=resource_aware, score=${chosen.score.toFixed(3)}, candidates=${candidates.length}, healthy=${healthy.length}/${online.length}, spread=${spread.toFixed(3)})`,
-  );
-  return chosen.node;
+  });
 }
 
 // Get status of a Proxmox task (UPID) - for polling from frontend
@@ -1055,15 +1108,32 @@ export async function migrateVM(node, vmid, targetNode, type = 'qemu') {
 
 // Create VM by cloning a template onto a load-balanced target node (CPU/memory + round-robin ties).
 export async function createFromTemplate(config) {
-  const { templateVmid, templateNode, name, vmid, pool, full, tags } = config;
-  if (!templateVmid || !templateNode) {
-    throw new Error('templateVmid and templateNode are required');
-  }
+  const { templateVmid, templateNode, templateName, name, vmid, pool, full, tags } = config;
   const newVmid = vmid != null ? parseInt(vmid, 10) : await getNextVmid();
   if (!newVmid) {
     throw new Error('Could not determine new VMID (provide vmid or ensure cluster/nextid works)');
   }
   const targetNode = await selectBalancedPlacementNode();
+  let sourceTemplateNode = templateNode;
+  let sourceTemplateVmid = templateVmid;
+
+  if (templateName) {
+    const wanted = normalizeTemplateName(templateName);
+    const templates = await getTemplates();
+    const match = (templates || []).find(
+      (t) => t.node === targetNode && normalizeTemplateName(t.name) === wanted,
+    );
+    if (!match) {
+      throw new Error(`Template "${templateName}" is not available on selected node "${targetNode}"`);
+    }
+    sourceTemplateNode = match.node;
+    sourceTemplateVmid = match.vmid;
+  }
+
+  if (!sourceTemplateNode || !sourceTemplateVmid) {
+    throw new Error('templateName or templateVmid/templateNode is required');
+  }
+
   const cloneConfig = {
     name: name || `VM-${newVmid}`,
     pool: pool || undefined,
@@ -1071,9 +1141,10 @@ export async function createFromTemplate(config) {
     full: true,
     type: 'qemu',
     target: targetNode,
+    storage: await getDefaultStorage(targetNode, 'qemu'),
     tags: tags || undefined,
   };
-  await cloneVM(templateNode, templateVmid, newVmid, cloneConfig);
+  await cloneVM(sourceTemplateNode, sourceTemplateVmid, newVmid, cloneConfig);
   return { vmid: newVmid, node: targetNode, name: cloneConfig.name };
 }
 

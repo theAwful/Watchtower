@@ -596,19 +596,22 @@ app.get('/api/proxmox/next-vmid', async (req, res) => {
 // Create VM from template (clone to load-balanced target node; async on Proxmox)
 app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
   try {
-    const { templateVmid, templateNode, name, vmid, full, tags } = req.body;
-    if (!templateVmid || !templateNode) {
+    const { templateVmid, templateNode, templateName, name, vmid, full, tags } = req.body;
+    if (!templateName && (!templateVmid || !templateNode)) {
       return res.status(400).json({
-        error: 'templateVmid and templateNode are required',
+        error: 'templateName or templateVmid/templateNode is required',
       });
     }
-    const tplCheck = await requireRecognizedTemplate(res, templateNode, templateVmid);
-    if (!tplCheck.ok) return;
+    if (!templateName) {
+      const tplCheck = await requireRecognizedTemplate(res, templateNode, templateVmid);
+      if (!tplCheck.ok) return;
+    }
 
     const extraTags = normalizeTags(tags);
     const result = await proxmox.createFromTemplate({
-      templateVmid: parseInt(templateVmid, 10),
-      templateNode,
+      templateVmid: templateVmid != null ? parseInt(templateVmid, 10) : undefined,
+      templateNode: templateNode || undefined,
+      templateName: templateName || undefined,
       name: name || undefined,
       vmid: vmid != null ? parseInt(vmid, 10) : undefined,
       pool: WATCHTOWER_PROXMOX_POOL,
@@ -616,8 +619,9 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
       tags: extraTags.length ? extraTags : undefined,
     });
     logEvent('proxmox_vm_create_started', {
-      templateNode,
-      templateVmid: parseInt(templateVmid, 10),
+      templateNode: templateNode || null,
+      templateVmid: templateVmid != null ? parseInt(templateVmid, 10) : null,
+      templateName: templateName || null,
       vmid: result?.vmid,
       node: result?.node,
       name: result?.name || name || null,

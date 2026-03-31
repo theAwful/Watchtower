@@ -40,6 +40,7 @@ import { copyToClipboard } from '../../utils/clipboardUtils';
 const STATUS_FILTER_ALL = 'all';
 const STATUS_FILTER_RUNNING = 'running';
 const VM_POLL_INTERVAL_MS = 30000;
+const ALLOWED_TEMPLATE_NAMES = new Set(['tmpl-kali', 'tmpl-win11']);
 
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
@@ -92,7 +93,17 @@ const Proxmox = () => {
   const fetchTemplates = async () => {
     try {
       const tplRes = await api.get('/api/proxmox/templates');
-      setVmTemplates(tplRes.data.templates || []);
+      const allTemplates = tplRes.data.templates || [];
+      const dedupByName = new Map();
+      allTemplates.forEach((t) => {
+        const key = String(t?.name || '').trim().toLowerCase();
+        if (!key) return;
+        if (!ALLOWED_TEMPLATE_NAMES.has(key)) return;
+        if (!dedupByName.has(key)) {
+          dedupByName.set(key, { name: t.name });
+        }
+      });
+      setVmTemplates(Array.from(dedupByName.values()));
     } catch (err) {
       console.error('Error fetching templates:', err);
       setVmTemplates([]);
@@ -200,17 +211,11 @@ const Proxmox = () => {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
       return;
     }
-    const [templateNode, templateVmid] = createConfig.template.split('/');
-    if (!templateNode || !templateVmid) {
-      setSnackbar({ open: true, message: 'Invalid template selection', severity: 'error' });
-      return;
-    }
     const vmName = buildVmNameForClone(createConfig.name);
     try {
       setCreateSubmitting(true);
       const response = await api.post('/api/proxmox/vms/create-from-template', {
-        templateNode,
-        templateVmid: parseInt(templateVmid, 10),
+        templateName: createConfig.template,
         name: vmName,
       });
       const { name, node, vmid } = response.data;
@@ -427,8 +432,8 @@ const Proxmox = () => {
                 label="Template"
               >
                 {vmTemplates.map((t) => (
-                  <MenuItem key={`${t.node}/${t.vmid}`} value={`${t.node}/${t.vmid}`}>
-                    {t.vmid} — {t.name || `Template ${t.vmid}`}
+                  <MenuItem key={t.name} value={t.name}>
+                    {t.name}
                   </MenuItem>
                 ))}
                 {vmTemplates.length === 0 && (
