@@ -179,9 +179,10 @@ const Proxmox = () => {
     try {
       setFlagDeleteSubmitting(true);
       const res = await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/flag-delete?type=${vmType(vm)}`);
+      const displayName = vm.name?.trim() || 'This machine';
       const msg = res.data?.already
-        ? `${vm.name || vm.vmid} is already flagged for deletion (ToBeDeleted).`
-        : `${vm.name || vm.vmid} flagged for deletion. Infra will remove it from Proxmox.`;
+        ? `${displayName} is already flagged for deletion.`
+        : `${displayName} has been flagged for deletion.`;
       setSnackbar({ open: true, message: msg, severity: 'success' });
       setFlagDeleteDialogVm(null);
       setTimeout(() => fetchVMs(), 1500);
@@ -405,15 +406,7 @@ const Proxmox = () => {
                             <StopIcon />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip
-                          title={
-                            vm.template
-                              ? 'Templates cannot be flagged for deletion'
-                              : hasDeletionRequestTag(vm)
-                                ? 'Already flagged for deletion (ToBeDeleted)'
-                                : 'Flag for deletion — adds ToBeDeleted tag (does not delete the VM)'
-                          }
-                        >
+                        <Tooltip title="Flag for deletion">
                           <span>
                             <IconButton
                               size="small"
@@ -451,12 +444,11 @@ const Proxmox = () => {
         <DialogTitle>Flag VM for deletion?</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary">
-            This does not delete the VM. It adds the Proxmox tag <strong>ToBeDeleted</strong> so administrators can remove it safely.
+            This does not remove the machine right away. An administrator will complete the removal.
           </Typography>
           {flagDeleteDialogVm && (
             <Typography variant="body2" sx={{ mt: 2 }}>
-              <strong>{flagDeleteDialogVm.name || `VM ${flagDeleteDialogVm.vmid}`}</strong>
-              {' '}(VMID {flagDeleteDialogVm.vmid} on {flagDeleteDialogVm.node})
+              <strong>{flagDeleteDialogVm.name?.trim() || 'This virtual machine'}</strong>
             </Typography>
           )}
         </DialogContent>
@@ -470,7 +462,7 @@ const Proxmox = () => {
             variant="contained"
             disabled={flagDeleteSubmitting}
           >
-            {flagDeleteSubmitting ? 'Working…' : 'Add ToBeDeleted tag'}
+            {flagDeleteSubmitting ? 'Working…' : 'DELETE'}
           </Button>
         </DialogActions>
       </Dialog>
