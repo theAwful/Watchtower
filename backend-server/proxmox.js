@@ -922,6 +922,10 @@ function normalizeTemplateName(name) {
   return String(name || '').trim().toLowerCase();
 }
 
+function normalizeNodeName(name) {
+  return String(name || '').trim().toLowerCase();
+}
+
 function isTemplateVM(vm) {
   if (!vm || vm.type !== 'qemu') return false;
   if (vm.template === true) return true;
@@ -938,6 +942,34 @@ export async function getTemplates() {
     console.error('Error fetching templates:', error);
     throw error;
   }
+}
+
+async function findTemplateOnNodeByName(nodeName, templateName) {
+  const wantedName = normalizeTemplateName(templateName);
+  const targetNode = normalizeNodeName(nodeName);
+
+  // First pass: use cluster-wide templates list.
+  const templates = await getTemplates();
+  const matchFromTemplates = (templates || []).find(
+    (t) => normalizeNodeName(t.node) === targetNode && normalizeTemplateName(t.name) === wantedName,
+  );
+  if (matchFromTemplates) return matchFromTemplates;
+
+  // Fallback: query chosen node's VM list directly in case cluster template view is stale/incomplete.
+  const nodeVms = await proxmoxRequest(`/nodes/${nodeName}/qemu`);
+  const list = Array.isArray(nodeVms) ? nodeVms : [];
+  const direct = list.find((vm) => normalizeTemplateName(vm?.name) === wantedName);
+  if (!direct) return null;
+
+  const vmid = direct.vmid != null ? parseInt(direct.vmid, 10) : null;
+  if (!vmid) return null;
+  return {
+    vmid,
+    node: nodeName,
+    name: direct.name || templateName,
+    type: 'qemu',
+    template: true,
+  };
 }
 
 // Get next available VMID from cluster
@@ -1118,11 +1150,7 @@ export async function createFromTemplate(config) {
   let sourceTemplateVmid = templateVmid;
 
   if (templateName) {
-    const wanted = normalizeTemplateName(templateName);
-    const templates = await getTemplates();
-    const match = (templates || []).find(
-      (t) => t.node === targetNode && normalizeTemplateName(t.name) === wanted,
-    );
+    const match = await findTemplateOnNodeByName(targetNode, templateName);
     if (!match) {
       throw new Error(`Template "${templateName}" is not available on selected node "${targetNode}"`);
     }
