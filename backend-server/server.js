@@ -570,7 +570,12 @@ app.get('/api/proxmox/nodes', async (req, res) => {
 app.get('/api/proxmox/templates', async (req, res) => {
   try {
     const templates = await proxmox.getTemplates();
-    res.json({ templates: templates || [] });
+    const allowed = new Set(['tmpl-kali', 'tmpl-win11']);
+    const filtered = (templates || []).filter((t) => {
+      const name = String(t?.name || '').trim().toLowerCase();
+      return allowed.has(name);
+    });
+    res.json({ templates: filtered });
   } catch (error) {
     console.error('Error fetching templates:', error);
     res.status(500).json({

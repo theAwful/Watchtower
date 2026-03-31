@@ -40,7 +40,10 @@ import { copyToClipboard } from '../../utils/clipboardUtils';
 const STATUS_FILTER_ALL = 'all';
 const STATUS_FILTER_RUNNING = 'running';
 const VM_POLL_INTERVAL_MS = 30000;
-const ALLOWED_TEMPLATE_NAMES = new Set(['tmpl-kali', 'tmpl-win11']);
+const TEMPLATE_OPTIONS = [
+  { name: 'tmpl-Kali', label: 'Kali' },
+  { name: 'tmpl-Win11', label: 'Windows 11' },
+];
 
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
@@ -54,7 +57,6 @@ const Proxmox = () => {
     template: '',
     name: '',
   });
-  const [vmTemplates, setVmTemplates] = useState([]);
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
 
@@ -90,26 +92,6 @@ const Proxmox = () => {
     }
   };
 
-  const fetchTemplates = async () => {
-    try {
-      const tplRes = await api.get('/api/proxmox/templates');
-      const allTemplates = tplRes.data.templates || [];
-      const dedupByName = new Map();
-      allTemplates.forEach((t) => {
-        const key = String(t?.name || '').trim().toLowerCase();
-        if (!key) return;
-        if (!ALLOWED_TEMPLATE_NAMES.has(key)) return;
-        if (!dedupByName.has(key)) {
-          dedupByName.set(key, { name: t.name });
-        }
-      });
-      setVmTemplates(Array.from(dedupByName.values()));
-    } catch (err) {
-      console.error('Error fetching templates:', err);
-      setVmTemplates([]);
-    }
-  };
-
   useEffect(() => {
     fetchVMs(true);
   }, []);
@@ -129,12 +111,6 @@ const Proxmox = () => {
   useInterval(() => {
     fetchVMs();
   }, isPageVisible ? VM_POLL_INTERVAL_MS : null);
-
-  useEffect(() => {
-    if (createDialogOpen) {
-      fetchTemplates();
-    }
-  }, [createDialogOpen]);
 
   const filteredVms = statusFilter === STATUS_FILTER_RUNNING
     ? vms.filter((vm) => vm.status === 'running')
@@ -431,14 +407,11 @@ const Proxmox = () => {
                 onChange={(e) => setCreateConfig({ ...createConfig, template: e.target.value })}
                 label="Template"
               >
-                {vmTemplates.map((t) => (
+                {TEMPLATE_OPTIONS.map((t) => (
                   <MenuItem key={t.name} value={t.name}>
-                    {t.name}
+                    {t.label}
                   </MenuItem>
                 ))}
-                {vmTemplates.length === 0 && (
-                  <MenuItem disabled>No templates found (e.g. tmpl-Kali, tmpl-Win11)</MenuItem>
-                )}
               </Select>
             </FormControl>
 
