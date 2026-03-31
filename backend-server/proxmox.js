@@ -628,6 +628,14 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
     if (config.storage) {
       cloneConfig.storage = config.storage;
     }
+    if (cloneConfig.full === 1 && !cloneConfig.storage) {
+      try {
+        // For reliable full clones, provide explicit destination storage on target node.
+        cloneConfig.storage = await getDefaultStorage(destNode);
+      } catch (storageErr) {
+        console.warn(`Could not auto-select storage for full clone on ${destNode}:`, storageErr.message);
+      }
+    }
     if (config.params) {
       Object.assign(cloneConfig, config.params);
     }
@@ -864,15 +872,19 @@ export async function rebootVM(node, vmid, type = 'qemu') {
 // API: GET /api2/json/nodes
 export async function getNodes() {
   try {
-    const nodes = await proxmoxRequest('/nodes');
+    // Use cluster resources for consistent node utilization metrics (cpu/mem/maxmem/status).
+    const clusterResources = await proxmoxRequest('/cluster/resources?type=node');
+    const list = Array.isArray(clusterResources)
+      ? clusterResources
+      : (clusterResources && typeof clusterResources === 'object' ? Object.values(clusterResources) : []);
     
-    return nodes.map(node => ({
+    return list.map((node) => ({
       node: node.node,
       status: node.status,
-      cpu: node.cpu || 0,
-      mem: node.mem || 0,
-      maxmem: node.maxmem || 0,
-      uptime: node.uptime || 0,
+      cpu: Number.isFinite(node.cpu) ? node.cpu : parseFloat(node.cpu) || 0,
+      mem: Number.isFinite(node.mem) ? node.mem : parseFloat(node.mem) || 0,
+      maxmem: Number.isFinite(node.maxmem) ? node.maxmem : parseFloat(node.maxmem) || 0,
+      uptime: Number.isFinite(node.uptime) ? node.uptime : parseFloat(node.uptime) || 0,
     }));
   } catch (error) {
     console.error('Error fetching nodes:', error);
@@ -958,14 +970,30 @@ export async function selectBalancedPlacementNode() {
     throw new Error('No online Proxmox nodes available for VM placement');
   }
 
-  const healthy = online.filter((n) => {
+  const metrics = online.map((n) => {
     const cpu = Number.isFinite(n.cpu) ? n.cpu : 0;
     const maxmem = Number.isFinite(n.maxmem) && n.maxmem > 0 ? n.maxmem : 1;
     const mem = Number.isFinite(n.mem) ? n.mem : 0;
     const memUtil = mem / maxmem;
-    return cpu <= PLACEMENT_MAX_CPU && memUtil <= PLACEMENT_MAX_MEM_UTIL;
+    const pressured = cpu > PLACEMENT_MAX_CPU || memUtil > PLACEMENT_MAX_MEM_UTIL;
+    return { ...n, cpu, memUtil, pressured };
   });
-  const pool = healthy.length > 0 ? healthy : online;
+  const healthy = metrics.filter((n) => !n.pressured);
+
+  // Default behavior: if nodes are all healthy, rotate in strict round-robin.
+  if (healthy.length === online.length) {
+    const roundRobinNodes = [...healthy].sort((a, b) => String(a.node).localeCompare(String(b.node)));
+    const idx = placementRoundRobinCounter % roundRobinNodes.length;
+    placementRoundRobinCounter += 1;
+    const chosen = roundRobinNodes[idx];
+    console.log(
+      `[Placement] ${chosen.node} (mode=round_robin_healthy, candidates=${roundRobinNodes.length}/${online.length})`,
+    );
+    return chosen.node;
+  }
+
+  // Under pressure: keep placement resource-aware on healthy nodes if available.
+  const pool = healthy.length > 0 ? healthy : metrics;
   const scored = pool.map((n) => ({ ...n, score: scoreNode(n) }));
   scored.sort((a, b) => b.score - a.score);
   const best = scored[0].score;
@@ -982,7 +1010,7 @@ export async function selectBalancedPlacementNode() {
   placementRoundRobinCounter += 1;
   const chosen = candidates[idx];
   console.log(
-    `[Placement] ${chosen.node} (score=${chosen.score.toFixed(3)}, candidates=${candidates.length}, healthy=${healthy.length}/${online.length}, spread=${spread.toFixed(3)})`,
+    `[Placement] ${chosen.node} (mode=resource_aware, score=${chosen.score.toFixed(3)}, candidates=${candidates.length}, healthy=${healthy.length}/${online.length}, spread=${spread.toFixed(3)})`,
   );
   return chosen.node;
 }
@@ -1033,12 +1061,15 @@ export async function createFromTemplate(config) {
     throw new Error('Could not determine new VMID (provide vmid or ensure cluster/nextid works)');
   }
   const targetNode = await selectBalancedPlacementNode();
+  const targetStorage = await getDefaultStorage(targetNode);
   const cloneConfig = {
     name: name || `VM-${newVmid}`,
     pool: pool || undefined,
-    full: full !== false,
+    // Force full clone for v1 behavior (no linked clones from templates).
+    full: true,
     type: 'qemu',
     target: targetNode,
+    storage: targetStorage || undefined,
     tags: tags || undefined,
   };
   await cloneVM(templateNode, templateVmid, newVmid, cloneConfig);
