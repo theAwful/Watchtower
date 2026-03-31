@@ -642,7 +642,9 @@ export async function cloneVM(node, sourceVmid, newVmid, config) {
     
     console.log(`\n=== Cloning VM ===`);
     console.log(`POST ${PROXMOX_BASE_URL_JSON}${endpoint}`);
-    console.log(`Body: newid=${cloneConfig.newid} name=${cloneConfig.name} target=${cloneConfig.target}`);
+    console.log(
+      `Body: newid=${cloneConfig.newid} name=${cloneConfig.name} target=${cloneConfig.target} full=${cloneConfig.full || 0} storage=${cloneConfig.storage || '(default)'}`,
+    );
     
     let result;
     try {
@@ -878,14 +880,23 @@ export async function getNodes() {
       ? clusterResources
       : (clusterResources && typeof clusterResources === 'object' ? Object.values(clusterResources) : []);
     
-    return list.map((node) => ({
-      node: node.node,
-      status: node.status,
-      cpu: Number.isFinite(node.cpu) ? node.cpu : parseFloat(node.cpu) || 0,
-      mem: Number.isFinite(node.mem) ? node.mem : parseFloat(node.mem) || 0,
-      maxmem: Number.isFinite(node.maxmem) ? node.maxmem : parseFloat(node.maxmem) || 0,
-      uptime: Number.isFinite(node.uptime) ? node.uptime : parseFloat(node.uptime) || 0,
-    }));
+    return list
+      .map((node) => {
+        const nodeName = node.node || (
+          typeof node.id === 'string' && node.id.includes('/')
+            ? node.id.split('/').pop()
+            : null
+        );
+        return {
+          node: nodeName || null,
+          status: node.status,
+          cpu: Number.isFinite(node.cpu) ? node.cpu : parseFloat(node.cpu) || 0,
+          mem: Number.isFinite(node.mem) ? node.mem : parseFloat(node.mem) || 0,
+          maxmem: Number.isFinite(node.maxmem) ? node.maxmem : parseFloat(node.maxmem) || 0,
+          uptime: Number.isFinite(node.uptime) ? node.uptime : parseFloat(node.uptime) || 0,
+        };
+      })
+      .filter((n) => !!n.node);
   } catch (error) {
     console.error('Error fetching nodes:', error);
     throw error;
