@@ -101,6 +101,44 @@ function toProxmoxTagsValue(tags) {
   return normalizeTagList(tags).join(';');
 }
 
+/** Proxmox Datacenter tag; infra uses this for scheduled cleanup instead of user delete. */
+const DELETE_REQUEST_TAG = (process.env.WATCHTOWER_VM_DELETE_REQUEST_TAG || 'ToBeDeleted').trim() || 'ToBeDeleted';
+
+export function getDeleteRequestTag() {
+  return DELETE_REQUEST_TAG;
+}
+
+export async function getVMConfig(node, vmid, type = 'qemu') {
+  const normalizedType = type === 'lxc' ? 'lxc' : 'qemu';
+  return proxmoxRequest(`/nodes/${node}/${normalizedType}/${vmid}/config`);
+}
+
+function isQemuTemplateConfig(cfg) {
+  if (!cfg || typeof cfg !== 'object') return false;
+  const t = cfg.template;
+  return t === 1 || t === true || t === '1';
+}
+
+/**
+ * Merge DELETE_REQUEST_TAG onto existing VM tags (does not remove other tags).
+ * @returns {{ ok: true, already: boolean, tags: string[] } | { ok: false, code: string, error: string }}
+ */
+export async function flagVmForDeletion(node, vmid, type = 'qemu') {
+  const cfg = await getVMConfig(node, vmid, type);
+  if (type !== 'lxc' && isQemuTemplateConfig(cfg)) {
+    return { ok: false, code: 'template', error: 'Template VMs cannot be flagged for deletion' };
+  }
+  const existing = parseProxmoxTags(cfg?.tags);
+  const tagLc = DELETE_REQUEST_TAG.toLowerCase();
+  const hasAlready = existing.some((t) => String(t).trim().toLowerCase() === tagLc);
+  if (hasAlready) {
+    return { ok: true, already: true, tags: existing };
+  }
+  const merged = normalizeTagList([...existing, DELETE_REQUEST_TAG]);
+  await setVMTags(node, vmid, type, merged, { maxAttempts: 8, delayMs: 2000 });
+  return { ok: true, already: false, tags: merged };
+}
+
 async function setVMTags(node, vmid, type = 'qemu', tags = [], options = {}) {
   const normalizedType = type === 'lxc' ? 'lxc' : 'qemu';
   const tagsValue = toProxmoxTagsValue(tags);

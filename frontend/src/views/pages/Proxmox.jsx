@@ -32,6 +32,7 @@ import {
   RestartAlt as RestartIcon,
   Refresh as RefreshIcon,
   Add as AddIcon,
+  DeleteOutline as DeleteOutlineIcon,
 } from '@mui/icons-material';
 import api from '../../models/ApiModel';
 import { useInterval } from '../../controllers/useInterval';
@@ -44,6 +45,11 @@ const TEMPLATE_OPTIONS = [
   { name: 'tmpl-Kali', label: 'Kali' },
   { name: 'tmpl-Win11', label: 'Windows 11' },
 ];
+
+/** Matches backend default WATCHTOWER_VM_DELETE_REQUEST_TAG (ToBeDeleted), case-insensitive. */
+const hasDeletionRequestTag = (vm) =>
+  Array.isArray(vm?.tags) &&
+  vm.tags.some((t) => String(t || '').trim().toLowerCase() === 'tobedeleted');
 
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
@@ -58,6 +64,8 @@ const Proxmox = () => {
     name: '',
   });
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [flagDeleteDialogVm, setFlagDeleteDialogVm] = useState(null);
+  const [flagDeleteSubmitting, setFlagDeleteSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
 
   const formatBytes = (bytes) => {
@@ -162,6 +170,29 @@ const Proxmox = () => {
       setTimeout(() => fetchVMs(), 2000);
     } catch (err) {
       setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to restart VM', severity: 'error' });
+    }
+  };
+
+  const confirmFlagForDeletion = async () => {
+    const vm = flagDeleteDialogVm;
+    if (!vm) return;
+    try {
+      setFlagDeleteSubmitting(true);
+      const res = await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/flag-delete?type=${vmType(vm)}`);
+      const msg = res.data?.already
+        ? `${vm.name || vm.vmid} is already flagged for deletion (ToBeDeleted).`
+        : `${vm.name || vm.vmid} flagged for deletion. Infra will remove it from Proxmox.`;
+      setSnackbar({ open: true, message: msg, severity: 'success' });
+      setFlagDeleteDialogVm(null);
+      setTimeout(() => fetchVMs(), 1500);
+    } catch (err) {
+      setSnackbar({
+        open: true,
+        message: err.response?.data?.error || 'Failed to flag VM for deletion',
+        severity: 'error',
+      });
+    } finally {
+      setFlagDeleteSubmitting(false);
     }
   };
 
@@ -374,6 +405,26 @@ const Proxmox = () => {
                             <StopIcon />
                           </IconButton>
                         </Tooltip>
+                        <Tooltip
+                          title={
+                            vm.template
+                              ? 'Templates cannot be flagged for deletion'
+                              : hasDeletionRequestTag(vm)
+                                ? 'Already flagged for deletion (ToBeDeleted)'
+                                : 'Flag for deletion — adds ToBeDeleted tag (does not delete the VM)'
+                          }
+                        >
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => setFlagDeleteDialogVm(vm)}
+                              disabled={!!vm.template || hasDeletionRequestTag(vm)}
+                              color="error"
+                            >
+                              <DeleteOutlineIcon />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                       </Box>
                     </TableCell>
                   </TableRow>
@@ -395,6 +446,34 @@ const Proxmox = () => {
           )}
         </>
       )}
+
+      <Dialog open={!!flagDeleteDialogVm} onClose={() => !flagDeleteSubmitting && setFlagDeleteDialogVm(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Flag VM for deletion?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This does not delete the VM. It adds the Proxmox tag <strong>ToBeDeleted</strong> so administrators can remove it safely.
+          </Typography>
+          {flagDeleteDialogVm && (
+            <Typography variant="body2" sx={{ mt: 2 }}>
+              <strong>{flagDeleteDialogVm.name || `VM ${flagDeleteDialogVm.vmid}`}</strong>
+              {' '}(VMID {flagDeleteDialogVm.vmid} on {flagDeleteDialogVm.node})
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFlagDeleteDialogVm(null)} disabled={flagDeleteSubmitting}>
+            Cancel
+          </Button>
+          <Button
+            onClick={confirmFlagForDeletion}
+            color="error"
+            variant="contained"
+            disabled={flagDeleteSubmitting}
+          >
+            {flagDeleteSubmitting ? 'Working…' : 'Add ToBeDeleted tag'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Create VM from template</DialogTitle>

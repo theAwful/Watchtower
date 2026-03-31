@@ -870,6 +870,46 @@ app.post('/api/proxmox/vms/:node/:vmid/restart', async (req, res) => {
   }
 });
 
+// Flag VM for infra deletion workflow: adds Proxmox tag (default ToBeDeleted); does not delete the VM.
+app.post('/api/proxmox/vms/:node/:vmid/flag-delete', async (req, res) => {
+  try {
+    const { node, vmid } = req.params;
+    const type = vmType(req.query.type);
+
+    const access = await requireVmInOperatorsPool(res, node, vmid, type);
+    if (!access.ok) return;
+
+    const result = await proxmox.flagVmForDeletion(node, vmid, type);
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error || 'Cannot flag VM for deletion' });
+    }
+    logEvent('proxmox_vm_flag_delete', {
+      node,
+      vmid: parseInt(vmid, 10),
+      type,
+      tag: proxmox.getDeleteRequestTag(),
+      already: result.already,
+      user: req.session?.user?.username || null,
+    });
+    res.json({
+      success: true,
+      already: result.already,
+      tags: result.tags,
+      tag: proxmox.getDeleteRequestTag(),
+    });
+  } catch (error) {
+    logError('proxmox_vm_flag_delete_failed', error, {
+      node: req.params?.node || null,
+      vmid: req.params?.vmid || null,
+      type: req.query?.type || 'qemu',
+      user: req.session?.user?.username || null,
+    });
+    res.status(500).json({
+      error: error.message || 'Failed to flag VM for deletion',
+    });
+  }
+});
+
 // Set Proxmox session cookie (same-origin only). After Watchtower login, redirect here to set PVEAuthCookie so noVNC works when Proxmox is reverse-proxied under the same domain.
 app.get('/api/proxmox/set-session', async (req, res) => {
   const redirectTo = (req.query.redirect && typeof req.query.redirect === 'string') ? req.query.redirect : '/';
