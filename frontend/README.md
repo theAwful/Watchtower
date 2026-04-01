@@ -1,29 +1,27 @@
-# Watchtower Frontend
+# Watchtower frontend
 
-React + Vite + Material UI. Single main page: **Proxmox VM Management** (list VMs, start/stop/restart, create from template, search/filter).
+React 19, Vite 6, Material UI 7. The shipped operator experience is the **Proxmox** page (`src/views/pages/Proxmox.jsx`): VM table, create from template (Kali / Windows 11), power actions, flag for deletion, search/filter.
 
-## Dev
+## Development
 
 ```bash
 npm ci
 npm run dev
 ```
 
-Runs at `http://localhost:5173`. Set the backend URL if needed (default proxy in Vite points to port 8080).
+Default: `http://localhost:5173`. The Vite dev server proxies API calls to the backend (typically port **8080**); ensure the backend is running with a valid `.env`.
 
-## Build
+## Production build
 
 ```bash
 npm ci
 npm run build
 ```
 
-Output in `dist/`. The Watchtower backend serves this in production (or when using Docker).
+Output: `dist/`. The Watchtower backend serves this folder in production (or your Docker image copies it).
 
-## Structure
+## Documentation
 
-- `src/views/pages/Proxmox.jsx` – Main (and only visible) page
-- `src/models/ApiModel.js` – API client
-- `src/views/components/` – Shared UI (e.g. AppLayout)
-
-See the root [README](../README.md) and [docs](docs/README.md) for full setup and deployment.
+- [Project README](../README.md)
+- [Proxmox UI behavior](../docs/pages/proxmox.md)
+- [Docs index](../docs/README.md)

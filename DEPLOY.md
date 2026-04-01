@@ -1,6 +1,8 @@
 # Deploying Watchtower
 
-Run Watchtower on a server so you can manage Proxmox VMs from one place. Access via **`http://<server-ip>:8080`** (or **`https://`** if you configure SSL). One process serves both the API and the UI.
+Run Watchtower on a server so operators can manage Proxmox VMs from one URL. Default access: **`http://<server-ip>:8080`** (or **`https://`** with TLS in `.env` or a reverse proxy). One Node process serves **both** the API and the built UI.
+
+**Configuration reference:** [docs/configuration.md](docs/configuration.md) — pool scope, placement thresholds, optional Watchtower login, delete-request tag, logging.
 
 ---
 

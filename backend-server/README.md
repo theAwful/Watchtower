@@ -1,44 +1,37 @@
-# Watchtower Backend
+# Watchtower backend
 
-Node.js Express server that proxies the Proxmox API and serves the Watchtower frontend in production. Optional: OpenVPN management for device features.
+Express server: Proxmox API proxy, optional OpenVPN device list, session auth, structured logging. In production it serves the built SPA from `frontend/dist`.
 
 ## Run
 
 ```bash
 npm ci
 cp ../.env.example .env
-# Edit .env: PROXMOX_HOST, PROXMOX_USER, PROXMOX_REALM, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET
+# Edit .env — see ../docs/configuration.md
 npm start
 ```
 
-For production, build the frontend first from the repo root:
+Build the frontend first if you want the UI at the same port:
 
 ```bash
 cd ../frontend && npm ci && npm run build
 ```
 
-Then the backend serves the UI at `http://localhost:8080` (or your `PORT`).
+## Highlights
 
-## Environment
-
-See the root [.env.example](../.env.example). Required for Proxmox:
-
-- `PROXMOX_HOST`, `PROXMOX_USER`, `PROXMOX_REALM`, `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`
-
-Optional: `PORT`, `SSL_CERT_PATH`, `SSL_KEY_PATH` (HTTPS), `OPENVPN_*`.
-
-**Proxmox pool scope (recommended for operators):**
-
-- `WATCHTOWER_PROXMOX_POOL` — Proxmox pool id; default `VM-Operators_Pool`. Watchtower lists and allows actions only on VMs whose pool membership matches (enforced in this app, not in Proxmox ACLs).
-- `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1` — Disable pool filtering (break-glass).
-- `WATCHTOWER_PLACEMENT_TIE_DELTA` — Optional; clone placement uses CPU/memory scores; nodes within this delta of the best score are round-robin’d (default `0.08`).
+- **Pool scope** — `WATCHTOWER_PROXMOX_POOL` (and optional `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL`)
+- **Create from template** — `POST /api/proxmox/vms/create-from-template` with `templateName`; per-node templates + placement (see docs)
+- **Flag delete** — `POST .../flag-delete` merges `WATCHTOWER_VM_DELETE_REQUEST_TAG` (default `ToBeDeleted`)
 
 ## Scripts
 
-- `npm start` – Run server
-- `npm run dev` – Run with `--watch` for development
+| Command | Purpose |
+|---------|---------|
+| `npm start` | Production-style run |
+| `npm run dev` | `node --watch server.js` |
 
-## Docs
+## Documentation
 
-- [Deploy (Docker, systemd, HTTPS)](../DEPLOY.md)
+- [Configuration (env vars)](../docs/configuration.md)
 - [Backend API](../docs/api/backend-api.md)
+- [Deploy (Docker, systemd, HTTPS)](../DEPLOY.md)

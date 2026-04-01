@@ -1,105 +1,75 @@
 # Watchtower
 
-Proxmox VM management dashboard. One app to view, control, and clone VMs across your Proxmox cluster—with optional HTTPS for IP-and-port access.
+Web app for **Proxmox VM operations** aimed at operators: one place to see pool-scoped VMs, power them on/off, create machines from standard templates, and **flag** machines for later removal—without handing out Proxmox admin or raw delete rights.
 
-## Features
+| If you want to… | Read |
+|-----------------|------|
+| Run it quickly | [QUICKSTART.md](QUICKSTART.md) |
+| Deploy Docker, systemd, HTTPS | [DEPLOY.md](DEPLOY.md) |
+| Every environment variable | [docs/configuration.md](docs/configuration.md) |
+| What the Proxmox screen does | [docs/pages/proxmox.md](docs/pages/proxmox.md) |
+| HTTP API details | [docs/api/backend-api.md](docs/api/backend-api.md) |
 
-- **VM list** – All QEMU/LXC VMs in one table (operators pool scope when configured)
-- **Start / Stop / Restart** – Power controls per VM
-- **Create VM from template** – Clone from a template (e.g. `tmpl-Kali`, `tmpl-Win11`) with auto VMID; placement is **load-balanced** across online nodes (CPU/memory), with round-robin among near-ties
-- **Search & filter** – Search by name, VMID, or IP; filter by “Running only” or “All”
-- **IP column** – Guest IP (when QEMU agent is available), click to copy
-- **HTTPS** – Optional SSL so you can use `https://<ip>:<port>`
+## What it does today
 
-## Quick start with Docker
+- **VM table** — Guests in a configurable Proxmox **pool** (default `VM-Operators_Pool`). Search by name, VMID, or IP; filter running vs all.
+- **Power** — Start, stop, restart (pool-checked on the server).
+- **Create VM** — User picks **Kali** or **Windows 11** only; the backend picks the node (round-robin with capacity skips), clones the matching **per-node template** (`tmpl-Kali` / `tmpl-Win11`), **full clone**, adds the guest to the operators pool. VM names get a date suffix automatically.
+- **Flag for deletion** — Trash control adds a Proxmox tag (default `ToBeDeleted`) so infrastructure can delete safely later. No delete API from the UI.
+- **Optional login** — Set `WATCHTOWER_USER` / `WATCHTOWER_PASSWORD` to require a session before `/api/*`.
+- **Optional HTTPS** — `SSL_CERT_PATH` + `SSL_KEY_PATH`, or TLS at a reverse proxy (see [DEPLOY.md](DEPLOY.md)).
 
-**Prerequisites:** Docker and Docker Compose.
+**Not in the v1 UI:** VM delete, noVNC console (some backend routes may still exist for future use).
 
-1. **Clone and configure**
+## Quick start (Docker)
 
-   ```bash
-   git clone <your-repo-url> watchtower && cd watchtower
-   cp .env.example .env
-   ```
+**Prerequisites:** Docker, Docker Compose, a Proxmox API token.
 
-2. **Edit `.env`** – set at least:
+```bash
+git clone <your-repo-url> watchtower && cd watchtower
+cp .env.example .env
+# Edit .env: PROXMOX_HOST, PROXMOX_USER, PROXMOX_REALM, PROXMOX_TOKEN_ID, PROXMOX_TOKEN_SECRET
+docker compose up -d
+```
 
-   - `PROXMOX_HOST` – Proxmox hostname or IP  
-   - `PROXMOX_USER` – e.g. `root` or a service user  
-   - `PROXMOX_REALM` – usually `pam`  
-   - `PROXMOX_TOKEN_ID` and `PROXMOX_TOKEN_SECRET` – from Proxmox **Datacenter → Permissions → API Tokens**
+Open `http://<server-ip>:8080` (or `https://` if you configured TLS in `.env` and Compose).
 
-3. **Run**
+## Local development (no Docker)
 
-   ```bash
-   docker compose up -d
-   ```
+**Backend** (Node 18+):
 
-4. **Open** `http://<server-ip>:8080` (or `https://` if you set `SSL_CERT_PATH` and `SSL_KEY_PATH`).
+```bash
+cd backend-server
+npm ci
+cp ../.env.example .env
+npm start
+```
 
-See [Deploying Watchtower](DEPLOY.md) for HTTPS, systemd, and other options.
+**Frontend** (second terminal):
 
-## Running without Docker
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-**Prerequisites:** Node.js 18+, npm.
+UI: `http://localhost:5173` (Vite). API default: `http://localhost:8080`.
 
-1. **Backend**
+**Production-style single process:** build the UI, then only run the backend; it serves `frontend/dist`:
 
-   ```bash
-   cd backend-server
-   npm ci
-   cp ../.env.example .env
-   # Edit .env with PROXMOX_* and optional SSL paths
-   npm start
-   ```
+```bash
+cd frontend && npm ci && npm run build && cd ..
+cd backend-server && npm start
+```
 
-2. **Frontend (dev)** – in another terminal:
+## Repository layout
 
-   ```bash
-   cd frontend
-   npm ci
-   npm run dev
-   ```
-
-   UI: `http://localhost:5173` (Vite), API: `http://localhost:8080`.
-
-3. **Production** – build once, then the backend serves the UI:
-
-   ```bash
-   cd frontend && npm ci && npm run build && cd ..
-   cd backend-server && npm start
-   ```
-
-   Single URL: `http://localhost:8080` (or your `PORT`).
-
-## Environment variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PROXMOX_HOST` | Yes | Proxmox hostname or IP |
-| `PROXMOX_PORT` | No | API port (default `8006`) |
-| `PROXMOX_USER` | Yes | Username (e.g. `root` or API token user) |
-| `PROXMOX_REALM` | No | Realm (default `pam`) |
-| `PROXMOX_TOKEN_ID` | Yes | API token name |
-| `PROXMOX_TOKEN_SECRET` | Yes | API token secret (UUID) |
-| `PORT` | No | Server port (default `8080`) |
-| `SSL_CERT_PATH` | No | Path to TLS cert (enables HTTPS) |
-| `SSL_KEY_PATH` | No | Path to TLS key |
-| `OPENVPN_*` | No | Only if you use OpenVPN device features |
-
-See [.env.example](.env.example) for a full template.
-
-## Project layout
-
-- **backend-server/** – Express server: Proxmox API proxy, optional OpenVPN, serves frontend in production
-- **frontend/** – React + Vite + Material UI; single page: Proxmox VM Management
-
-## Docs
-
-- [Deploying Watchtower (Docker, systemd, HTTPS)](DEPLOY.md)
-- [Quick start (local dev)](QUICKSTART.md)
-- [Proxmox page & API](docs/pages/proxmox.md)  
-- [Backend API reference](docs/api/backend-api.md)
+| Path | Role |
+|------|------|
+| `backend-server/` | Express app: Proxmox proxy, optional OpenVPN, static UI in production |
+| `frontend/` | React + Vite + MUI; main page `Proxmox.jsx` |
+| `docs/` | User and API documentation |
+| `.env.example` | Environment template |
 
 ## License
 

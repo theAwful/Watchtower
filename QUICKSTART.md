@@ -1,64 +1,66 @@
-# Quick Start
+# Quick start
 
-Get Watchtower (Proxmox VM management) running in a few minutes.
+Minimal steps to run Watchtower. For production hardening, TLS, and systemd, use [DEPLOY.md](DEPLOY.md). For every environment variable, see [docs/configuration.md](docs/configuration.md).
 
-## Option A: Docker
+## Docker (fastest)
 
-1. **Clone and configure**
+```bash
+git clone <repo-url> watchtower && cd watchtower
+cp .env.example .env
+```
 
-   ```bash
-   git clone <repo-url> watchtower && cd watchtower
-   cp .env.example .env
-   ```
+Edit `.env` — at minimum:
 
-2. **Edit `.env`** – set your Proxmox API token:
+- `PROXMOX_HOST`, `PROXMOX_USER`, `PROXMOX_REALM`
+- `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`  
+  (Proxmox: **Datacenter → Permissions → API Tokens**)
 
-   - `PROXMOX_HOST` – Proxmox IP or hostname  
-   - `PROXMOX_USER` – e.g. `root`  
-   - `PROXMOX_REALM` – `pam`  
-   - `PROXMOX_TOKEN_ID` and `PROXMOX_TOKEN_SECRET` – from Proxmox: **Datacenter → Permissions → API Tokens → Add**
+Optional but recommended for operators:
 
-3. **Run**
+- `WATCHTOWER_PROXMOX_POOL` — pool id your VMs live in (default matches `VM-Operators_Pool`)
+- `WATCHTOWER_USER`, `WATCHTOWER_PASSWORD` — require login to the app
 
-   ```bash
-   docker compose up -d
-   ```
+Then:
 
-4. **Open** `http://<this-machine-ip>:8080`
+```bash
+docker compose up -d
+```
 
-## Option B: Local (Node)
+Open `http://<server-ip>:8080`.
 
-1. **Backend**
+## Local development (Node)
 
-   ```bash
-   cd backend-server
-   npm ci
-   cp ../.env.example .env
-   # Edit .env with PROXMOX_* (see above)
-   npm start
-   ```
+**Terminal 1 — backend**
 
-2. **Frontend (separate terminal)**
+```bash
+cd backend-server
+npm ci
+cp ../.env.example .env
+npm start
+```
 
-   ```bash
-   cd frontend
-   npm ci
-   npm run dev
-   ```
+**Terminal 2 — frontend**
 
-3. **Open** `http://localhost:5173` (Vite). The UI talks to the backend on port 8080.
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-For a single URL in production, build the frontend and run only the backend: see [README.md](README.md#running-without-docker).
+- UI: `http://localhost:5173`
+- API: `http://localhost:8080` (configure proxy if your frontend expects a different URL)
 
-## Proxmox API token
+**Single-URL preview:** build the frontend, run only the backend — see [README.md](README.md#local-development-no-docker).
 
-1. Log into the Proxmox web UI.  
-2. Go to **Datacenter → Permissions → API Tokens**.  
-3. **Add**: choose user (e.g. `root@pam`), token ID, and generate a secret.  
-4. Put the same user in `PROXMOX_USER`, token ID in `PROXMOX_TOKEN_ID`, secret in `PROXMOX_TOKEN_SECRET`.
+## Proxmox token checklist
 
-## Troubleshooting
+The token’s user needs rights to list and manage guests in your target pool: read VMs/nodes, power, clone, and (for flag-for-deletion) update VM config / tags as your ACLs require.
 
-- **VMs not loading** – Check `PROXMOX_HOST` and that the server can reach Proxmox (e.g. `curl -k https://<PROXMOX_HOST>:8006/api2/json/version`). Confirm the token has at least **VM.Audit**, **VM.Config.Network**, **Datastore.AllocateSpace** (and **VM.Clone** for Create VM).
-- **Create VM fails** – Ensure the source is a template (e.g. `tmpl-Kali`). VM names must be DNS-friendly (letters, numbers, hyphens; no spaces).
-- **HTTPS** – See [DEPLOY.md](DEPLOY.md) for SSL with Docker or systemd.
+## If something fails
+
+| Symptom | Check |
+|---------|--------|
+| Empty VM list | Pool membership, `WATCHTOWER_PROXMOX_POOL`, token scope |
+| 401 from API | Set `WATCHTOWER_*` login — call `POST /api/auth/login` or use the app login page |
+| Create VM fails on a node | Same template **name** exists on **that** node (`tmpl-Kali` / `tmpl-Win11`) |
+| TLS | [DEPLOY.md](DEPLOY.md) — Docker volume mounts or reverse proxy |

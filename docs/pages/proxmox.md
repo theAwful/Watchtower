@@ -1,66 +1,75 @@
-# Proxmox VM Management
+# Proxmox VM Management (main UI)
 
-The main Watchtower page: view and manage Proxmox VMs and containers from a single UI.
+The default Watchtower experience: a single page to work with VMs that live in your **operators pool** in Proxmox.
 
-## Overview
+## Who sees what
 
-- **VM list** – QEMU and LXC VMs in a single table (operators pool when `WATCHTOWER_PROXMOX_POOL` is active).
-- **Filters** – “Running only” (default) or “All”; search by name, VMID, or IP.
-- **Create VM from template** – Clone a template (e.g. `tmpl-Kali`, `tmpl-Win11`) with auto VMID; the backend picks a target node using **load balancing** (free memory + CPU headroom), with **round-robin** among nodes in a close score band.
-- **Power actions** – Start, Restart, Stop per VM.
-- **IP** – Guest IP when QEMU agent is available; click to copy.
+- With **`WATCHTOWER_PROXMOX_POOL`** set (default `VM-Operators_Pool`), the table lists only VMs that belong to that pool. Power actions, create-from-template, and flag-for-deletion all enforce the same rule on the server.
+- **`WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1`** turns off that filter (use only for debugging or special environments).
 
 ## VM table
 
-Each VM row shows:
+| Column | Description |
+|--------|-------------|
+| VMID | Proxmox guest id |
+| Name | Guest name |
+| Status | e.g. running / stopped |
+| CPU | Usage (cluster resource view) |
+| Memory | Used / max |
+| Uptime | Time running |
+| IP | Guest IPv4 from QEMU agent when available; click to copy |
+| Actions | Start, restart, stop; **flag for deletion** (trash) |
 
-| Column   | Description                          |
-|----------|--------------------------------------|
-| VMID     | Proxmox VM/container ID              |
-| Name     | VM name                              |
-| Status   | running / stopped / etc.              |
-| CPU      | CPU usage %                          |
-| Memory   | Used / max                            |
-| Uptime   | Time running                          |
-| IP       | Guest IP (if agent present); click to copy |
-| Actions  | Start, Restart, Stop  |
-
-## Create VM from template
+## Create VM
 
 1. Click **Create VM**.
-2. Choose a **Template** (e.g. `105 — tmpl-Kali`).
-3. Enter a **Name** (DNS-friendly: letters, numbers, hyphens; no spaces).
-4. Click **Create VM**.
+2. Choose **Kali** or **Windows 11** (maps to template names `tmpl-Kali` and `tmpl-Win11` on the backend).
+3. Enter a **base name** (letters, numbers, hyphens). The app appends today’s date (`YYYY-MM-DD`) to the name sent to Proxmox.
+4. Confirm **Create VM**.
 
-The backend starts a clone from the template’s node with `target` set to the chosen placement node. Creation runs as a task on Proxmox; the list will update after a refresh. New VMs use the next free VMID. The API response includes `node` (where the clone was placed) for follow-up calls such as `create-from-template/finalize` (`placedNode`).
+**You do not pick a node.** The server:
+
+- Maintains a **round-robin pointer** over online nodes (sorted by name).
+- Walks that order and **skips** nodes that exceed CPU / memory / disk thresholds (see [configuration](../configuration.md)).
+- Clones using the template **on the chosen node** (same template name must exist on each node you use; cloning does not rely on moving a template from another node).
+- Uses a **full** clone (`full=1`) and targets default QEMU disk storage on that node when needed.
+- Adds the new VM to the configured operators pool.
+
+Creation is asynchronous in Proxmox; refresh the list after a short wait.
+
+## Flag for deletion
+
+The trash action opens a short confirmation. It does **not** call Proxmox delete. It **merges** the tag configured by **`WATCHTOWER_VM_DELETE_REQUEST_TAG`** (default `ToBeDeleted`) onto the VM’s existing tags so administrators can remove it later under your own process.
+
+- Template VMs cannot be flagged.
+- Guests that already carry that tag (case-insensitive match) show the control disabled.
 
 ## Search and filter
 
-- **Search** – Matches VM name, VMID, or IP as you type.
-- **Show** – “Running only” (default) or “All”.
+- **Search** — Substring match on name, VMID, or IP.
+- **Show** — **Running only** (default) or **All**.
 
-## API used by this page
+## APIs used by this page
 
-- `GET /api/proxmox/vms` – VMs in the configured operators pool (with guest IP when agent is available)
-- `GET /api/proxmox/templates` – QEMU template VMs cluster-wide (e.g. `tmpl-Kali`, `tmpl-Win11` on `pve-node0`); not limited to the operators pool
-- `POST /api/proxmox/vms/create-from-template` – Clone from template; new VM is added to `VM-Operators_Pool` (or `WATCHTOWER_PROXMOX_POOL`)
-- `POST /api/proxmox/vms/:node/:vmid/start` – Start
-- `POST /api/proxmox/vms/:node/:vmid/stop` – Stop
-- `POST /api/proxmox/vms/:node/:vmid/restart` – Restart
-VM deletion and in-browser console (noVNC) are not in the v1 UI; use Proxmox as an admin if needed. The backend may still expose a console URL route for future use.
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/proxmox/vms` | Pool-scoped VM list (includes `tags` when Proxmox exposes them) |
+| GET | `/api/proxmox/templates` | Filtered list for UI (`tmpl-Kali`, `tmpl-Win11` only) |
+| POST | `/api/proxmox/vms/create-from-template` | Body: `templateName`, `name`; optional legacy `templateNode` + `templateVmid` |
+| POST | `/api/proxmox/vms/:node/:vmid/start` | Query `type=qemu` or `lxc` |
+| POST | `/api/proxmox/vms/:node/:vmid/stop` | Same |
+| POST | `/api/proxmox/vms/:node/:vmid/restart` | Same |
+| POST | `/api/proxmox/vms/:node/:vmid/flag-delete` | Adds deletion-request tag |
+
+Direct **DELETE** of a VM through Watchtower is **not** supported; use Proxmox as an admin.
 
 ## Configuration
 
-Proxmox is configured via environment variables (see [README](../../README.md) and [.env.example](../../.env.example)):
-
-- `PROXMOX_HOST`, `PROXMOX_PORT`, `PROXMOX_USER`, `PROXMOX_REALM`
-- `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`
-- `PROXMOX_PASSWORD` (optional) – Password for the same user; used by server-side flows that log into Proxmox (e.g. session cookie / future console support).
-
-Create the token in Proxmox: **Datacenter → Permissions → API Tokens**. The token needs at least VM and node read, and VM power/clone where you use those features (delete is not exposed in Watchtower).
+See [Configuration reference](../configuration.md) and the root [.env.example](../../.env.example).
 
 ## Troubleshooting
 
-- **VMs not loading** – Check backend logs and Proxmox connectivity. Ensure the API token has permissions (e.g. VM.Audit, VM.Allocate).
-- **Create VM fails** – Use a template (e.g. name starting with `tmpl-` or marked template in Proxmox). Keep VM names DNS-friendly.
-- **No guest IP** – Install and enable the QEMU guest agent in the VM; IP is read from the agent.
+- **No VMs** — Confirm pool id, token permissions, and that guests are members of the pool in Proxmox.
+- **Create fails on one node** — Ensure `tmpl-Kali` / `tmpl-Win11` exist **on that node** with the expected names.
+- **No IP** — Install and run the QEMU guest agent in the VM.
+- **Auth errors** — If `WATCHTOWER_USER` / `WATCHTOWER_PASSWORD` are set, log in through the app before calling the API from scripts.

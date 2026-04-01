@@ -1,20 +1,34 @@
-# Watchtower Documentation
+# Watchtower documentation
 
-Watchtower is a **Proxmox VM management** dashboard: one UI to list, start, stop, restart, and clone VMs across your cluster, with optional HTTPS for IP-and-port access.
+This folder is the **documentation home** for the Watchtower repo. The app shipped here is centered on **Proxmox VM management** for a defined operator pool.
 
-## Documentation
+## Start here
 
-- **[Proxmox VM Management](pages/proxmox.md)** – UI overview: VM list, filters, Create from template, API usage
-- **[Backend API Reference](api/backend-api.md)** – REST endpoints for Proxmox and health
+1. **[../README.md](../README.md)** — Project overview, features, Docker and dev commands.
+2. **[../QUICKSTART.md](../QUICKSTART.md)** — Shortest path to a running instance.
+3. **[configuration.md](configuration.md)** — All environment variables in one place.
 
-## Getting started
+## By topic
 
-- **[README](../README.md)** – Overview, Docker quick start, env vars
-- **[DEPLOY.md](../DEPLOY.md)** – Docker, systemd, PM2, HTTPS
-- **[QUICKSTART.md](../QUICKSTART.md)** – Minimal steps to run with Docker or Node
+| Document | Contents |
+|----------|----------|
+| [pages/proxmox.md](pages/proxmox.md) | Proxmox UI: table, create VM, flag for deletion, behavior notes |
+| [api/backend-api.md](api/backend-api.md) | REST endpoints, auth, request/response shapes |
+| [../DEPLOY.md](../DEPLOY.md) | Docker, host install, systemd, PM2, HTTPS, reverse proxy |
+| [../backend-server/README.md](../backend-server/README.md) | Backend-only run notes |
+| [../frontend/README.md](../frontend/README.md) | Frontend dev and build |
 
-## Stack
+## Other pages under `pages/`
 
-- **Frontend:** React 19, Material UI 7, Vite 6
-- **Backend:** Node.js 18+, Express 4
-- **Proxmox:** REST API (token auth); clone via `/api2/json` or `/api2/extjs` as needed
+Files such as [dashboard.md](pages/dashboard.md) describe **OpenVPN / dashboard** style features that may exist or evolve alongside the main Proxmox flow. Treat **proxmox.md** and **backend-api.md** as the source of truth for the primary operator workflow.
+
+## Contributing to docs
+
+When behavior changes (new env vars, API routes, or UI flows), update:
+
+- [configuration.md](configuration.md) for env vars  
+- [api/backend-api.md](api/backend-api.md) for HTTP API  
+- [pages/proxmox.md](pages/proxmox.md) for operator-facing behavior  
+- [../README.md](../README.md) feature list if user-visible scope shifts  
+
+Keep [.env.example](../.env.example) in sync with new variables.

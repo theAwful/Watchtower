@@ -1,14 +1,30 @@
 # Backend API Reference
 
-Complete API documentation for the Watchtower backend server.
+REST API for the Watchtower backend (`/api/...`). Default port **8080** unless `PORT` is set.
+
+For a full environment variable list see [Configuration](../configuration.md).
 
 ## Base URL
 
-All API endpoints are prefixed with `/api`. The backend server runs on port 8080 by default.
+Use the same origin as the web UI in production (the backend serves the built frontend). In local dev, the UI often talks to `http://localhost:8080`.
 
 ## Authentication
 
-Currently, the API does not require authentication. All endpoints are publicly accessible. Consider implementing authentication for production deployments.
+- If **`WATCHTOWER_USER`** and **`WATCHTOWER_PASSWORD`** are **not** set, `/api/*` is open (except you should still protect the host at the network or reverse-proxy layer).
+- If they **are** set, clients must establish a **session cookie** via login; unauthenticated requests to `/api/*` return **401**, except:
+  - `POST /api/auth/login`
+  - `GET /api/auth/status`
+  - `GET /api/health`
+
+Send credentials with `credentials: 'include'` (or equivalent) from browsers so the session cookie is stored and sent.
+
+### Watchtower auth endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/auth/login` | Body: `{ "username", "password" }` — sets session on success |
+| POST | `/api/auth/logout` | Destroys session |
+| GET | `/api/auth/status` | `{ "user": { "username" } }` or 401 |
 
 ## OpenVPN Endpoints
 
@@ -70,16 +86,23 @@ Retrieve a list of all virtual machines and containers from all Proxmox nodes.
       "mem": 1073741824,
       "maxmem": 2147483648,
       "uptime": 86400,
-      "pool": "production"
+      "pool": "VM-Operators_Pool",
+      "tags": ["SomeTag"]
     }
   ],
   "operatorsPool": "VM-Operators_Pool"
 }
 ```
 
-When `WATCHTOWER_PROXMOX_POOL` is active (default `VM-Operators_Pool`, unless `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1`), `vms` only includes guests in that pool, and `operatorsPool` echoes the pool id. Mutating endpoints return **403** if the target VM is not in that pool.
+When pool restriction is active (default `VM-Operators_Pool`, unless `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL=1`), `vms` only includes guests in that pool, and `operatorsPool` echoes the pool id. Mutating endpoints return **403** if the target VM is not in that pool.
 
-Clone **templates** (for the Create VM flow) are listed without pool filtering—e.g. `tmpl-Kali` on `pve-node0` can live outside `VM-Operators_Pool`. New VMs from `POST /api/proxmox/vms/create-from-template` are still added to `VM-Operators_Pool` (or `WATCHTOWER_PROXMOX_POOL`) and are **placed on an online node** chosen by load (memory + CPU) with round-robin among near-tied nodes. Optional env: `WATCHTOWER_PLACEMENT_TIE_DELTA` (default `0.08`) widens or narrows the tie band. For `POST /api/proxmox/vms/create-from-template/finalize`, send **`placedNode`** from the create response (or `templateNode` if the VM is still on that node) so pool checks and optional migration use the correct node.
+`tags` is included when Proxmox exposes tags on cluster resources (e.g. deletion-request workflow).
+
+### Get QEMU templates (UI subset)
+
+**Endpoint**: `GET /api/proxmox/templates`
+
+Returns templates after server-side filtering to **`tmpl-Kali`** and **`tmpl-Win11`** only. The create-VM API resolves the template **on the selected node** by name.
 
 ### Get Proxmox Nodes
 
@@ -218,6 +241,65 @@ Stop a running virtual machine or container.
   "result": {}
 }
 ```
+
+### Restart VM
+
+**Endpoint**: `POST /api/proxmox/vms/:node/:vmid/restart`
+
+**Parameters**: `node`, `vmid`, optional query `type` (`qemu` default, or `lxc`).
+
+**Response**: `{ "success": true, "result": {} }` on success.
+
+### Create VM from template
+
+Starts a **full** clone on a node selected by the backend (round-robin with capacity thresholds). Request body should prefer **`templateName`** (`tmpl-Kali` or `tmpl-Win11`). Legacy **`templateNode`** + **`templateVmid`** is still accepted for tools that pass explicit ids.
+
+**Endpoint**: `POST /api/proxmox/vms/create-from-template`
+
+**Request body** (recommended):
+
+```json
+{
+  "templateName": "tmpl-Kali",
+  "name": "MyLab-2026-03-31"
+}
+```
+
+Optional: `vmid` (cluster next id is used if omitted), `tags` (extra tags as string array).
+
+**Response** (example):
+
+```json
+{
+  "success": true,
+  "vmid": 200,
+  "node": "pve-node1",
+  "name": "MyLab-2026-03-31"
+}
+```
+
+New guests are added to `WATCHTOWER_PROXMOX_POOL` when pool restriction is enabled.
+
+**Endpoint** (optional follow-up): `POST /api/proxmox/vms/create-from-template/finalize` — body includes `vmid`, and `placedNode` (or `templateNode`) for pool checks / migration helpers.
+
+### Flag VM for deletion (tag only)
+
+Does **not** delete the VM. Merges **`WATCHTOWER_VM_DELETE_REQUEST_TAG`** (default `ToBeDeleted`) with existing Proxmox VM tags. Target must be in the operators pool. Template VMs are rejected.
+
+**Endpoint**: `POST /api/proxmox/vms/:node/:vmid/flag-delete?type=qemu`
+
+**Response**:
+
+```json
+{
+  "success": true,
+  "already": false,
+  "tags": ["ExistingTag", "ToBeDeleted"],
+  "tag": "ToBeDeleted"
+}
+```
+
+`already: true` if the tag was already present (case-insensitive match).
 
 ### Delete VM (disabled)
 
@@ -361,27 +443,6 @@ Currently, there is no rate limiting implemented. Consider adding rate limiting 
 
 The API has CORS enabled to allow requests from the frontend. In development, the frontend proxy handles CORS. In production, ensure proper CORS configuration.
 
-## Environment Variables
+## Environment variables
 
-The backend requires the following environment variables:
-
-### OpenVPN
-- `OPENVPN_HOST`: OpenVPN server hostname (default: localhost)
-- `OPENVPN_PORT`: OpenVPN management port (default: 7505)
-- `OPENVPN_PASSWORD`: Management interface password (optional)
-
-### Proxmox
-- `PROXMOX_HOST`: Proxmox server hostname
-- `PROXMOX_PORT`: Proxmox API port (default: 8006)
-- `PROXMOX_USER`: Proxmox username
-- `PROXMOX_REALM`: Authentication realm (default: pam)
-- `PROXMOX_TOKEN_ID`: API token ID
-- `PROXMOX_TOKEN_SECRET`: API token secret
-- `PROXMOX_PASSWORD`: (optional) Password for same user; used for Proxmox session flows (e.g. `/api/proxmox/set-session`); may help console URLs in some setups
-- `WATCHTOWER_PROXMOX_POOL`: (optional) Proxmox pool id; default `VM-Operators_Pool`. Limits Watchtower VM list and actions to that pool.
-- `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL`: (optional) Set to `1` to disable pool filtering.
-- `WATCHTOWER_PLACEMENT_TIE_DELTA`: (optional) Width of the load-score band for round-robin among tied nodes when creating VMs from templates (default `0.08`).
-
-### Server
-- `PORT`: Backend server port (default: 8080)
-
+See **[Configuration reference](../configuration.md)** for tables covering Proxmox, Watchtower pool/login/delete-tag, clone placement thresholds, TLS, logging, and OpenVPN.
