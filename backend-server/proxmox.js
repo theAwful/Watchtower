@@ -952,6 +952,108 @@ export async function getNodes() {
   }
 }
 
+/** Proxmox group whose members appear in the Create VM operator dropdown. */
+const OPERATORS_GROUP = (process.env.WATCHTOWER_PROXMOX_OPERATORS_GROUP || 'VM_Operators').trim() || 'VM_Operators';
+
+function slugifyNameSegment(s) {
+  return String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+}
+
+export function getOperatorsGroupId() {
+  return OPERATORS_GROUP;
+}
+
+/**
+ * VM name: operatorSlug-clientSlug-YYYY-MM-DD (used for Proxmox guest name).
+ * @param {string} dateSuffix - YYYY-MM-DD
+ */
+export function buildOperatorClientVmName(operatorSlug, clientName, dateSuffix) {
+  const op = slugifyNameSegment(operatorSlug);
+  const cl = slugifyNameSegment(clientName);
+  const d = String(dateSuffix || '').trim();
+  if (!op || !cl) {
+    throw new Error('Operator and client name must include at least one letter or number');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    throw new Error('Invalid date suffix for VM name');
+  }
+  return `${op}-${cl}-${d}`;
+}
+
+export function vmNameDateSuffixLocal() {
+  const dt = new Date();
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Users in {@link OPERATORS_GROUP} for the Create VM operator list.
+ * API: GET /access/users, GET /access/users/{userid} when groups not on index.
+ */
+export async function getOperatorUsersForUI() {
+  const raw = await proxmoxRequest('/access/users');
+  const list = Array.isArray(raw)
+    ? raw
+    : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+  const out = [];
+  const seenSlugs = new Map();
+
+  for (const item of list) {
+    const userid = typeof item === 'string' ? item : item?.userid;
+    if (!userid || typeof userid !== 'string') continue;
+
+    let groups = item.groups;
+    let enable = item.enable;
+    if (groups == null || enable === undefined) {
+      try {
+        const full = await proxmoxRequest(`/access/users/${encodeURIComponent(userid)}`);
+        groups = full?.groups;
+        enable = full?.enable;
+      } catch {
+        continue;
+      }
+    }
+
+    if (enable === 0 || enable === false || enable === '0') continue;
+
+    const groupList = Array.isArray(groups)
+      ? groups.map((g) => String(g).trim())
+      : typeof groups === 'string'
+        ? groups.split(/[,;]/).map((g) => g.trim()).filter(Boolean)
+        : [];
+    if (!groupList.includes(OPERATORS_GROUP)) continue;
+
+    const at = userid.indexOf('@');
+    const localPart = at >= 0 ? userid.slice(0, at) : userid;
+    const realm = at >= 0 ? userid.slice(at + 1) : 'pam';
+    let slug = `${slugifyNameSegment(localPart)}-${slugifyNameSegment(realm)}`;
+    if (!slug || slug === '-') slug = 'operator';
+
+    if (seenSlugs.has(slug)) {
+      let n = 2;
+      while (seenSlugs.has(`${slug}-${n}`)) n += 1;
+      slug = `${slug}-${n}`;
+    }
+    seenSlugs.set(slug, true);
+
+    out.push({
+      userid,
+      label: at >= 0 ? `${localPart} (${realm})` : localPart,
+      slug,
+    });
+  }
+
+  out.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+  return out;
+}
+
 // Known template VM names (clone sources)
 const TEMPLATE_NAME_PATTERN = /^tmpl-/i;
 const KNOWN_TEMPLATE_NAMES = ['tmpl-kali', 'tmpl-win11'];

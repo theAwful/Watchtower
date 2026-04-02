@@ -585,6 +585,23 @@ app.get('/api/proxmox/templates', async (req, res) => {
   }
 });
 
+// Proxmox users in VM_Operators (or WATCHTOWER_PROXMOX_OPERATORS_GROUP) for Create VM operator dropdown
+app.get('/api/proxmox/operators', async (req, res) => {
+  try {
+    const operators = await proxmox.getOperatorUsersForUI();
+    res.json({
+      operators,
+      group: proxmox.getOperatorsGroupId(),
+    });
+  } catch (error) {
+    logError('proxmox_operators_fetch_failed', error);
+    res.status(500).json({
+      operators: [],
+      error: error.message || 'Failed to fetch operators from Proxmox',
+    });
+  }
+});
+
 // Get next available VMID
 app.get('/api/proxmox/next-vmid', async (req, res) => {
   try {
@@ -601,7 +618,17 @@ app.get('/api/proxmox/next-vmid', async (req, res) => {
 // Create VM from template (clone to load-balanced target node; async on Proxmox)
 app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
   try {
-    const { templateVmid, templateNode, templateName, name, vmid, full, tags } = req.body;
+    const {
+      templateVmid,
+      templateNode,
+      templateName,
+      name,
+      operatorSlug,
+      clientName,
+      vmid,
+      full,
+      tags,
+    } = req.body;
     if (!templateName && (!templateVmid || !templateNode)) {
       return res.status(400).json({
         error: 'templateName or templateVmid/templateNode is required',
@@ -612,12 +639,29 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
       if (!tplCheck.ok) return;
     }
 
+    let finalName;
+    const op = operatorSlug != null ? String(operatorSlug).trim() : '';
+    const cl = clientName != null ? String(clientName).trim() : '';
+    if (op && cl) {
+      try {
+        finalName = proxmox.buildOperatorClientVmName(op, cl, proxmox.vmNameDateSuffixLocal());
+      } catch (e) {
+        return res.status(400).json({ error: e.message || 'Invalid operator or client name' });
+      }
+    } else if (name != null && String(name).trim() !== '') {
+      finalName = String(name).trim();
+    } else {
+      return res.status(400).json({
+        error: 'operatorSlug and clientName are required (or provide name for automation-only use)',
+      });
+    }
+
     const extraTags = normalizeTags(tags);
     const result = await proxmox.createFromTemplate({
       templateVmid: templateVmid != null ? parseInt(templateVmid, 10) : undefined,
       templateNode: templateNode || undefined,
       templateName: templateName || undefined,
-      name: name || undefined,
+      name: finalName,
       vmid: vmid != null ? parseInt(vmid, 10) : undefined,
       pool: WATCHTOWER_PROXMOX_POOL,
       full: full === true,
@@ -629,7 +673,8 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
       templateName: templateName || null,
       vmid: result?.vmid,
       node: result?.node,
-      name: result?.name || name || null,
+      name: result?.name || finalName || null,
+      operatorSlug: op || null,
       user: req.session?.user?.username || null,
     });
     res.json({ success: true, ...result });

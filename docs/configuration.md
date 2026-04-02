@@ -24,6 +24,7 @@ Create the token in Proxmox with permissions appropriate for listing VMs, power 
 | `WATCHTOWER_PROXMOX_POOL` | No | `VM-Operators_Pool` | Only VMs in this Proxmox **pool** appear in the UI and accept power / clone / flag-delete actions. Enforcement is in Watchtower; the API token may still have wider rights in Proxmox. |
 | `WATCHTOWER_PROXMOX_POOL_ALLOW_ALL` | No | unset | Set to `1` to disable pool filtering (break-glass / lab only). |
 | `WATCHTOWER_VM_DELETE_REQUEST_TAG` | No | `ToBeDeleted` | Proxmox **tag** merged onto a VM when a user uses **Flag for deletion** in the UI. Does not delete the VM; infra removes guests with this tag in Proxmox. |
+| `WATCHTOWER_PROXMOX_OPERATORS_GROUP` | No | `VM_Operators` | Proxmox **group** id. Users in this group are listed in the Create VM operator dropdown. The Watchtower service account must be allowed to call Proxmox **`GET /access/users`** (and per-user config when the index omits `groups`); that is usually covered by an Administrator-equivalent role or a custom role with user-read access. |
 | `WATCHTOWER_USER` | No | — | If set with `WATCHTOWER_PASSWORD`, browser **session login** is required for `/api/*` (except health, auth routes). |
 | `WATCHTOWER_PASSWORD` | No | — | Password for the Watchtower web user. |
 | `SESSION_SECRET` | No | derived | Secret for the session cookie; set explicitly in production. |

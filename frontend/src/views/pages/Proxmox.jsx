@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Box,
   Typography,
@@ -25,6 +25,7 @@ import {
   FormControl,
   InputLabel,
   Snackbar,
+  LinearProgress,
 } from '@mui/material';
 import {
   PlayArrow as PlayIcon,
@@ -51,6 +52,17 @@ const hasDeletionRequestTag = (vm) =>
   Array.isArray(vm?.tags) &&
   vm.tags.some((t) => String(t || '').trim().toLowerCase() === 'tobedeleted');
 
+const powerPendingKey = (vm) => `${vm.node}|${vm.vmid}|${vm?.type === 'lxc' ? 'lxc' : 'qemu'}`;
+
+/** Mirrors backend slug rules for create-VM name preview. */
+const slugifySegment = (s) =>
+  String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -61,9 +73,15 @@ const Proxmox = () => {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createConfig, setCreateConfig] = useState({
     template: '',
-    name: '',
+    operatorSlug: '',
+    clientName: '',
   });
+  const [operators, setOperators] = useState([]);
+  const [operatorsLoading, setOperatorsLoading] = useState(false);
+  const [operatorsError, setOperatorsError] = useState(null);
+  const [operatorsGroup, setOperatorsGroup] = useState('');
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [powerPending, setPowerPending] = useState({});
   const [flagDeleteDialogVm, setFlagDeleteDialogVm] = useState(null);
   const [flagDeleteSubmitting, setFlagDeleteSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
@@ -86,23 +104,80 @@ const Proxmox = () => {
     return `${minutes}m`;
   };
 
-  const fetchVMs = async (showLoading = false) => {
+  const fetchVMs = useCallback(async (showLoading = false) => {
     try {
       if (showLoading) setLoading(true);
       const response = await api.get('/api/proxmox/vms');
-      setVms(response.data.vms || []);
+      const list = response.data.vms || [];
+      setVms(list);
       setError(null);
+      setPowerPending((prev) => {
+        if (Object.keys(prev).length === 0) return prev;
+        const next = { ...prev };
+        for (const key of Object.keys(next)) {
+          const pend = next[key];
+          if (Date.now() > pend.deadline) {
+            delete next[key];
+            continue;
+          }
+          const [node, vmidStr, typ] = key.split('|');
+          const vmid = parseInt(vmidStr, 10);
+          const row = list.find(
+            (v) => v.node === node && v.vmid === vmid && (v.type === 'lxc' ? 'lxc' : 'qemu') === typ,
+          );
+          if (!row) continue;
+          if (pend.untilStatus === 'running' && pend.restartGateMs != null) {
+            if (row.status === 'running' && Date.now() >= pend.restartGateMs) delete next[key];
+          } else if (row.status === pend.untilStatus) {
+            delete next[key];
+          }
+        }
+        return next;
+      });
     } catch (err) {
       console.error('Error fetching VMs:', err);
       setError(err.response?.data?.error || 'Failed to fetch VMs');
     } finally {
       if (showLoading) setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchVMs(true);
-  }, []);
+  }, [fetchVMs]);
+
+  useEffect(() => {
+    if (Object.keys(powerPending).length === 0) return undefined;
+    const id = setInterval(() => {
+      fetchVMs(false);
+    }, 2000);
+    return () => clearInterval(id);
+  }, [powerPending, fetchVMs]);
+
+  useEffect(() => {
+    if (!createDialogOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setOperatorsLoading(true);
+        setOperatorsError(null);
+        const res = await api.get('/api/proxmox/operators');
+        if (cancelled) return;
+        setOperators(res.data.operators || []);
+        setOperatorsGroup(res.data.group || '');
+      } catch (err) {
+        if (!cancelled) {
+          setOperators([]);
+          setOperatorsError(err.response?.data?.error || 'Could not load operators from Proxmox');
+        }
+      } finally {
+        if (!cancelled) setOperatorsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [createDialogOpen]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -114,7 +189,7 @@ const Proxmox = () => {
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, []);
+  }, [fetchVMs]);
 
   useInterval(() => {
     fetchVMs();
@@ -144,31 +219,66 @@ const Proxmox = () => {
   const vmType = (vm) => (vm?.type === 'lxc' ? 'lxc' : 'qemu');
 
   const handleStart = async (vm) => {
+    const key = powerPendingKey(vm);
     try {
+      setPowerPending((p) => ({
+        ...p,
+        [key]: { action: 'start', untilStatus: 'running', deadline: Date.now() + 120000 },
+      }));
       await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/start?type=${vmType(vm)}`);
-      setSnackbar({ open: true, message: `Starting VM ${vm.name}...`, severity: 'success' });
-      setTimeout(() => fetchVMs(), 1000);
+      setSnackbar({ open: true, message: 'Starting…', severity: 'info' });
+      await fetchVMs(false);
     } catch (err) {
+      setPowerPending((p) => {
+        const n = { ...p };
+        delete n[key];
+        return n;
+      });
       setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to start VM', severity: 'error' });
     }
   };
 
   const handleStop = async (vm) => {
+    const key = powerPendingKey(vm);
     try {
+      setPowerPending((p) => ({
+        ...p,
+        [key]: { action: 'stop', untilStatus: 'stopped', deadline: Date.now() + 120000 },
+      }));
       await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/stop?type=${vmType(vm)}`);
-      setSnackbar({ open: true, message: `Stopping VM ${vm.name}...`, severity: 'success' });
-      setTimeout(() => fetchVMs(), 1000);
+      setSnackbar({ open: true, message: 'Stopping…', severity: 'info' });
+      await fetchVMs(false);
     } catch (err) {
+      setPowerPending((p) => {
+        const n = { ...p };
+        delete n[key];
+        return n;
+      });
       setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to stop VM', severity: 'error' });
     }
   };
 
   const handleRestart = async (vm) => {
+    const key = powerPendingKey(vm);
     try {
+      setPowerPending((p) => ({
+        ...p,
+        [key]: {
+          action: 'restart',
+          untilStatus: 'running',
+          restartGateMs: Date.now() + 8000,
+          deadline: Date.now() + 120000,
+        },
+      }));
       await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/restart?type=${vmType(vm)}`);
-      setSnackbar({ open: true, message: `Restarting VM ${vm.name}...`, severity: 'success' });
-      setTimeout(() => fetchVMs(), 2000);
+      setSnackbar({ open: true, message: 'Restarting…', severity: 'info' });
+      await fetchVMs(false);
     } catch (err) {
+      setPowerPending((p) => {
+        const n = { ...p };
+        delete n[key];
+        return n;
+      });
       setSnackbar({ open: true, message: err.response?.data?.error || 'Failed to restart VM', severity: 'error' });
     }
   };
@@ -197,9 +307,7 @@ const Proxmox = () => {
     }
   };
 
-  const getVmName = (baseName) => (baseName || '').trim() || 'VM';
-
-  /** Suffix for clone names: local calendar date, DNS-friendly (hyphens only). */
+  /** Local calendar date suffix (matches server vmNameDateSuffixLocal). */
   const formatCloneDateSuffix = () => {
     const d = new Date();
     const y = d.getFullYear();
@@ -208,10 +316,11 @@ const Proxmox = () => {
     return `${y}-${m}-${day}`;
   };
 
-  /** Final VM name sent to Proxmox: user base + creation date. */
-  const buildVmNameForClone = (baseName) => {
-    const base = getVmName(baseName);
-    return `${base}-${formatCloneDateSuffix()}`;
+  const previewCloneVmName = () => {
+    const op = slugifySegment(createConfig.operatorSlug);
+    const cl = slugifySegment(createConfig.clientName);
+    if (!op || !cl) return '';
+    return `${op}-${cl}-${formatCloneDateSuffix()}`;
   };
 
   const handleCreateFromTemplate = async () => {
@@ -219,21 +328,29 @@ const Proxmox = () => {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
       return;
     }
-    const vmName = buildVmNameForClone(createConfig.name);
+    if (!createConfig.operatorSlug) {
+      setSnackbar({ open: true, message: 'Please select an operator', severity: 'warning' });
+      return;
+    }
+    if (!slugifySegment(createConfig.clientName)) {
+      setSnackbar({ open: true, message: 'Enter a client name (letters or numbers)', severity: 'warning' });
+      return;
+    }
     try {
       setCreateSubmitting(true);
       const response = await api.post('/api/proxmox/vms/create-from-template', {
         templateName: createConfig.template,
-        name: vmName,
+        operatorSlug: createConfig.operatorSlug,
+        clientName: createConfig.clientName,
       });
-      const { name, node, vmid } = response.data;
+      const { name } = response.data;
       setSnackbar({
         open: true,
-        message: `VM creation started: "${name || vmid}" on ${node}. It may take a minute—refresh the list.`,
+        message: name ? `Creating "${name}"… This can take a minute.` : 'Creating VM… This can take a minute.',
         severity: 'success',
       });
       setCreateDialogOpen(false);
-      setCreateConfig({ template: '', name: '' });
+      setCreateConfig({ template: '', operatorSlug: '', clientName: '' });
       setTimeout(() => fetchVMs(), 3000);
     } catch (err) {
       setSnackbar({
@@ -335,12 +452,35 @@ const Proxmox = () => {
                   <TableRow key={`${vm.node}-${vm.vmid}`} hover>
                     <TableCell align="center" sx={{ textAlign: 'center' }}>{vm.vmid}</TableCell>
                     <TableCell align="center" sx={{ textAlign: 'center' }}>{vm.name || `VM-${vm.vmid}`}</TableCell>
-                    <TableCell align="center" sx={{ textAlign: 'center' }}>
-                      <Chip
-                        label={vm.status || 'unknown'}
-                        color={vm.status === 'running' ? 'success' : vm.status === 'stopped' ? 'default' : 'warning'}
-                        size="small"
-                      />
+                    <TableCell align="center" sx={{ textAlign: 'center', minWidth: 120 }}>
+                      {(() => {
+                        const pend = powerPending[powerPendingKey(vm)];
+                        const label = pend
+                          ? pend.action === 'start'
+                            ? 'Starting…'
+                            : pend.action === 'stop'
+                              ? 'Stopping…'
+                              : 'Restarting…'
+                          : vm.status || 'unknown';
+                        const color = pend
+                          ? 'warning'
+                          : vm.status === 'running'
+                            ? 'success'
+                            : vm.status === 'stopped'
+                              ? 'default'
+                              : 'warning';
+                        return (
+                          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.75, py: 0.5 }}>
+                            <Chip label={label} color={color} size="small" />
+                            {pend ? (
+                              <LinearProgress
+                                variant="indeterminate"
+                                sx={{ width: '100%', maxWidth: 140, height: 4, borderRadius: 1 }}
+                              />
+                            ) : null}
+                          </Box>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell align="center" sx={{ textAlign: 'center' }}>{(vm.cpu * 100).toFixed(1)}%</TableCell>
                     <TableCell align="center" sx={{ textAlign: 'center' }}>
@@ -386,41 +526,47 @@ const Proxmox = () => {
                     <TableCell align="center" sx={{ textAlign: 'center' }}>
                       <Box component="span" sx={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: 0 }}>
                         <Tooltip title="Start">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleStart(vm)}
-                            disabled={vm.status === 'running'}
-                            color="success"
-                          >
-                            <PlayIcon />
-                          </IconButton>
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleStart(vm)}
+                              disabled={vm.status === 'running' || !!powerPending[powerPendingKey(vm)]}
+                              color="success"
+                            >
+                              <PlayIcon />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                         <Tooltip title="Restart">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleRestart(vm)}
-                            disabled={vm.status !== 'running'}
-                            color="info"
-                          >
-                            <RestartIcon />
-                          </IconButton>
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleRestart(vm)}
+                              disabled={vm.status !== 'running' || !!powerPending[powerPendingKey(vm)]}
+                              color="info"
+                            >
+                              <RestartIcon />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                         <Tooltip title="Stop">
-                          <IconButton
-                            size="small"
-                            onClick={() => handleStop(vm)}
-                            disabled={vm.status !== 'running'}
-                            color="warning"
-                          >
-                            <StopIcon />
-                          </IconButton>
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleStop(vm)}
+                              disabled={vm.status !== 'running' || !!powerPending[powerPendingKey(vm)]}
+                              color="warning"
+                            >
+                              <StopIcon />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                         <Tooltip title="Flag for deletion">
                           <span>
                             <IconButton
                               size="small"
                               onClick={() => setFlagDeleteDialogVm(vm)}
-                              disabled={!!vm.template || hasDeletionRequestTag(vm)}
+                              disabled={!!vm.template || hasDeletionRequestTag(vm) || !!powerPending[powerPendingKey(vm)]}
                               color="error"
                             >
                               <DeleteOutlineIcon />
@@ -476,8 +622,18 @@ const Proxmox = () => {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={createDialogOpen} onClose={() => setCreateDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={createDialogOpen}
+        onClose={() => {
+          if (createSubmitting) return;
+          setCreateDialogOpen(false);
+          setCreateConfig({ template: '', operatorSlug: '', clientName: '' });
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>Create VM from template</DialogTitle>
+        {createSubmitting ? <LinearProgress variant="indeterminate" /> : null}
         <DialogContent>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
             <FormControl fullWidth required>
@@ -486,6 +642,7 @@ const Proxmox = () => {
                 value={createConfig.template}
                 onChange={(e) => setCreateConfig({ ...createConfig, template: e.target.value })}
                 label="Template"
+                disabled={createSubmitting}
               >
                 {TEMPLATE_OPTIONS.map((t) => (
                   <MenuItem key={t.name} value={t.name}>
@@ -495,16 +652,48 @@ const Proxmox = () => {
               </Select>
             </FormControl>
 
+            <FormControl fullWidth required disabled={operatorsLoading || createSubmitting}>
+              <InputLabel>Operator</InputLabel>
+              <Select
+                value={createConfig.operatorSlug}
+                onChange={(e) => setCreateConfig({ ...createConfig, operatorSlug: e.target.value })}
+                label="Operator"
+              >
+                {operators.map((op) => (
+                  <MenuItem key={op.userid} value={op.slug}>
+                    {op.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            {operatorsLoading ? (
+              <Typography variant="caption" color="text.secondary">
+                Loading operators from Proxmox…
+              </Typography>
+            ) : null}
+            {operatorsError ? (
+              <Alert severity="warning">{operatorsError}</Alert>
+            ) : null}
+            {operatorsGroup && !operatorsError ? (
+              <Typography variant="caption" color="text.secondary">
+                Operators are members of Proxmox group <strong>{operatorsGroup}</strong>.
+              </Typography>
+            ) : null}
+
             <TextField
               fullWidth
-              label="Name"
-              value={createConfig.name}
-              onChange={(e) => setCreateConfig({ ...createConfig, name: e.target.value })}
-              placeholder="e.g. Kali-Hedy"
+              required
+              label="Client name"
+              value={createConfig.clientName}
+              onChange={(e) => setCreateConfig({ ...createConfig, clientName: e.target.value })}
+              placeholder="e.g. Acme Corp or project id"
+              disabled={createSubmitting}
+              helperText="Used in the VM name only. Use letters, numbers, or spaces (normalized to hyphens)."
             />
             <Typography variant="caption" color="text.secondary" display="block">
-              VM will be named: <strong>{buildVmNameForClone(createConfig.name)}</strong>
-              {' '}(today&apos;s date is appended automatically)
+              VM name will be:{' '}
+              <strong>{previewCloneVmName() || '—'}</strong>
+              {' '}(operator + client + today&apos;s date)
             </Typography>
             <Typography variant="caption" color="text.secondary">
               New VMs are added to the operators pool.
@@ -512,11 +701,25 @@ const Proxmox = () => {
           </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCreateDialogOpen(false)}>Cancel</Button>
+          <Button
+            onClick={() => {
+              setCreateDialogOpen(false);
+              setCreateConfig({ template: '', operatorSlug: '', clientName: '' });
+            }}
+            disabled={createSubmitting}
+          >
+            Cancel
+          </Button>
           <Button
             onClick={handleCreateFromTemplate}
             variant="contained"
-            disabled={!createConfig.template || createSubmitting}
+            disabled={
+              !createConfig.template ||
+              !createConfig.operatorSlug ||
+              !slugifySegment(createConfig.clientName) ||
+              createSubmitting ||
+              operatorsLoading
+            }
           >
             {createSubmitting ? 'Creating…' : 'Create VM'}
           </Button>

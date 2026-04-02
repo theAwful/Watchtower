@@ -23,9 +23,12 @@ The default Watchtower experience: a single page to work with VMs that live in y
 ## Create VM
 
 1. Click **Create VM**.
-2. Choose **Kali** or **Windows 11** (maps to template names `tmpl-Kali` and `tmpl-Win11` on the backend).
-3. Enter a **base name** (letters, numbers, hyphens). The app appends today’s date (`YYYY-MM-DD`) to the name sent to Proxmox.
-4. Confirm **Create VM**.
+2. Choose **Kali** or **Windows 11** (maps to `tmpl-Kali` / `tmpl-Win11`).
+3. Choose an **Operator** from the dropdown (Proxmox users in the configured group, default **`VM_Operators`** — see `WATCHTOWER_PROXMOX_OPERATORS_GROUP`).
+4. Enter a **Client name** (free text; normalized to a DNS-safe segment).
+5. Confirm **Create VM**.
+
+The VM name is built on the server as **`operator-client-YYYY-MM-DD`** (segments lowercased; spaces and punctuation become hyphens).
 
 **You do not pick a node.** The server:
 
@@ -55,7 +58,8 @@ The trash action opens a short confirmation. It does **not** call Proxmox delete
 |--------|------|---------|
 | GET | `/api/proxmox/vms` | Pool-scoped VM list (includes `tags` when Proxmox exposes them) |
 | GET | `/api/proxmox/templates` | Filtered list for UI (`tmpl-Kali`, `tmpl-Win11` only) |
-| POST | `/api/proxmox/vms/create-from-template` | Body: `templateName`, `name`; optional legacy `templateNode` + `templateVmid` |
+| GET | `/api/proxmox/operators` | Users in `WATCHTOWER_PROXMOX_OPERATORS_GROUP` for the operator dropdown |
+| POST | `/api/proxmox/vms/create-from-template` | Body: `templateName`, `operatorSlug`, `clientName` (or legacy `name` for automation) |
 | POST | `/api/proxmox/vms/:node/:vmid/start` | Query `type=qemu` or `lxc` |
 | POST | `/api/proxmox/vms/:node/:vmid/stop` | Same |
 | POST | `/api/proxmox/vms/:node/:vmid/restart` | Same |

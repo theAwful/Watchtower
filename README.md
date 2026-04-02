@@ -14,7 +14,7 @@ Web app for **Proxmox VM operations** aimed at operators: one place to see pool-
 
 - **VM table** — Guests in a configurable Proxmox **pool** (default `VM-Operators_Pool`). Search by name, VMID, or IP; filter running vs all.
 - **Power** — Start, stop, restart (pool-checked on the server).
-- **Create VM** — User picks **Kali** or **Windows 11** only; the backend picks the node (round-robin with capacity skips), clones the matching **per-node template** (`tmpl-Kali` / `tmpl-Win11`), **full clone**, adds the guest to the operators pool. VM names get a date suffix automatically.
+- **Create VM** — Template (**Kali** / **Windows 11**), **operator** (Proxmox users in `VM_Operators` or `WATCHTOWER_PROXMOX_OPERATORS_GROUP`), and **client name**; final VM name is `operator-client-YYYY-MM-DD`. Backend picks the node (round-robin + capacity), clones the **per-node** template, **full clone**, adds the guest to the operators pool.
 - **Flag for deletion** — Trash control adds a Proxmox tag (default `ToBeDeleted`) so infrastructure can delete safely later. No delete API from the UI.
 - **Optional login** — Set `WATCHTOWER_USER` / `WATCHTOWER_PASSWORD` to require a session before `/api/*`.
 - **Optional HTTPS** — `SSL_CERT_PATH` + `SSL_KEY_PATH`, or TLS at a reverse proxy (see [DEPLOY.md](DEPLOY.md)).

@@ -104,6 +104,22 @@ When pool restriction is active (default `VM-Operators_Pool`, unless `WATCHTOWER
 
 Returns templates after server-side filtering to **`tmpl-Kali`** and **`tmpl-Win11`** only. The create-VM API resolves the template **on the selected node** by name.
 
+### List operator users (Create VM dropdown)
+
+Proxmox users who belong to **`WATCHTOWER_PROXMOX_OPERATORS_GROUP`** (default `VM_Operators`). Requires API token permission to read `/access/users`.
+
+**Endpoint**: `GET /api/proxmox/operators`
+
+**Response**:
+```json
+{
+  "operators": [
+    { "userid": "jdoe@pam", "label": "jdoe (pam)", "slug": "jdoe-pam" }
+  ],
+  "group": "VM_Operators"
+}
+```
+
 ### Get Proxmox Nodes
 
 Retrieve a list of all Proxmox nodes.
@@ -261,9 +277,12 @@ Starts a **full** clone on a node selected by the backend (round-robin with capa
 ```json
 {
   "templateName": "tmpl-Kali",
-  "name": "MyLab-2026-03-31"
+  "operatorSlug": "jdoe-pam",
+  "clientName": "Acme Red Team"
 }
 ```
+
+The server builds `name` as `operatorSlug-clientSlug-YYYY-MM-DD` (normalized segments, local server date). For automation-only calls you may send **`name`** instead of `operatorSlug` / `clientName`.
 
 Optional: `vmid` (cluster next id is used if omitted), `tags` (extra tags as string array).
 
