@@ -41,6 +41,12 @@ const PROXMOX_TOKEN_ID = process.env.PROXMOX_TOKEN_ID || '';
 const PROXMOX_TOKEN_SECRET = process.env.PROXMOX_TOKEN_SECRET || '';
 const PROXMOX_USER = process.env.PROXMOX_USER || 'root';
 const PROXMOX_REALM = process.env.PROXMOX_REALM || 'pam';
+
+/** Value for Authorization on REST and WebSocket upgrade when using API tokens. */
+export function getPveApiTokenAuthorizationHeader() {
+  if (!PROXMOX_TOKEN_ID || !PROXMOX_TOKEN_SECRET) return null;
+  return `PVEAPIToken=${PROXMOX_USER}@${PROXMOX_REALM}!${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}`;
+}
 /** Password for Proxmox /access/ticket (console flow). User must support password auth — API-token-only users get 401. */
 const PROXMOX_PASSWORD = process.env.PROXMOX_PASSWORD || '';
 /** Optional: use a different user for console ticket (e.g. root). If unset, uses PROXMOX_USER. Use when API token user has no password. */
@@ -172,8 +178,9 @@ async function proxmoxRequest(endpoint, method = 'GET', data = null, opts = {}) 
   return new Promise((resolve, reject) => {
     const url = new URL(`${baseUrl}${endpoint}`);
     const headers = {};
-    if (PROXMOX_TOKEN_ID && PROXMOX_TOKEN_SECRET) {
-      headers['Authorization'] = `PVEAPIToken=${PROXMOX_USER}@${PROXMOX_REALM}!${PROXMOX_TOKEN_ID}=${PROXMOX_TOKEN_SECRET}`;
+    const apiAuth = getPveApiTokenAuthorizationHeader();
+    if (apiAuth) {
+      headers['Authorization'] = apiAuth;
     } else {
       reject(new Error('Proxmox API auth missing: set PROXMOX_TOKEN_ID and PROXMOX_TOKEN_SECRET in .env'));
       return;
@@ -1622,13 +1629,16 @@ export async function updateVMPool(vmid, type, poolid, node) {
 
 // noVNC + Proxmox: vncproxy with websocket=1 → vncticket + port; then POST /access/vncticket when using password session.
 // Prefer PROXMOX_PASSWORD: /access/ticket → vncproxy (cookie+CSRF) → /access/vncticket (VM.Console). Falls back to API token vncproxy if no password.
-// API: POST .../vncproxy with body websocket=1 → { ticket: PVEVNC:..., port }. Ticket must be in URL and URL-encoded (+ → %2B).
+// API: POST /api2/json/nodes/{node}/qemu|lxc/{vmid}/vncproxy with body websocket=1 → { ticket, port } (VM.Console on /vms/{vmid}).
+// Browser VNC binary stream: GET wss://…/api2/json/nodes/{node}/qemu|lxc/{vmid}/vncwebsocket?port=&vncticket= (not /nodes/{node}/vncwebsocket — that is node Sys.Console).
 export async function getVNCConsole(node, vmid, type = 'qemu', vmname = '') {
   const normalizedType = type === 'lxc' ? 'lxc' : 'qemu';
   let vncticket;
   let port;
+  let authSource = 'api_token';
 
   if (isProxmoxPasswordConfigured()) {
+    authSource = 'pve_password_session';
     const vnc = await vncProxyWithPasswordSession(node, vmid, normalizedType);
     vncticket = vnc.ticket;
     port = vnc.port;
@@ -1660,7 +1670,7 @@ export async function getVNCConsole(node, vmid, type = 'qemu', vmname = '') {
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&');
   const vncUrl = `${base}/?${qs}`;
-  return { ticket: vncticket, port, url: vncUrl };
+  return { ticket: vncticket, port, url: vncUrl, authSource };
 }
 
 /** Get vncticket + port (same auth rules as getVNCConsole). */

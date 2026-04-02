@@ -111,6 +111,12 @@ const Proxmox = () => {
   const [flagDeleteSubmitting, setFlagDeleteSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
   const [consoleOpeningKey, setConsoleOpeningKey] = useState(null);
+  const [consoleDialogOpen, setConsoleDialogOpen] = useState(false);
+  const [consoleWsUrl, setConsoleWsUrl] = useState('');
+  const [consoleTitle, setConsoleTitle] = useState('');
+  const [consoleFallbackUrl, setConsoleFallbackUrl] = useState('');
+  const consoleMountRef = useRef(null);
+  const consoleRfbRef = useRef(null);
 
   const provisionCompleteFiredRef = useRef(false);
 
@@ -413,20 +419,6 @@ const Proxmox = () => {
     setConsoleOpeningKey(key);
     setSnackbar({ open: true, message: 'Opening console…', severity: 'info' });
 
-    const win = window.open('about:blank', '_blank');
-    if (!win) {
-      setSnackbar({ open: true, message: 'Allow pop-ups for this site to open the console', severity: 'warning' });
-      setConsoleOpeningKey(null);
-      return;
-    }
-    try {
-      win.document.title = 'Console';
-      win.document.body.innerHTML =
-        '<p style="font-family:system-ui,sans-serif;margin:2rem;color:#888">Opening console…</p>';
-    } catch {
-      /* ignore */
-    }
-
     (async () => {
       try {
         const typ = vmType(vm);
@@ -435,19 +427,19 @@ const Proxmox = () => {
         const res = await api.get(
           `/api/proxmox/vms/${encodeURIComponent(vm.node)}/${vm.vmid}/console?${params}`,
         );
-        const url = res.data?.url;
-        if (!url) {
-          win.close();
-          setSnackbar({ open: true, message: 'No console URL returned', severity: 'error' });
+        const wsProxyPath = res.data?.wsProxyPath;
+        const fallbackUrl = res.data?.url;
+        if (!wsProxyPath || typeof wsProxyPath !== 'string') {
+          setSnackbar({ open: true, message: 'No console session returned', severity: 'error' });
           return;
         }
-        win.location.href = url;
+        const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        const wsUrl = `${proto}://${window.location.host}${wsProxyPath}`;
+        setConsoleTitle(vm.name ? `${vm.name} (${vm.vmid})` : `VM ${vm.vmid}`);
+        setConsoleFallbackUrl(typeof fallbackUrl === 'string' ? fallbackUrl : '');
+        setConsoleWsUrl(wsUrl);
+        setConsoleDialogOpen(true);
       } catch (err) {
-        try {
-          win.close();
-        } catch {
-          /* ignore */
-        }
         setSnackbar({
           open: true,
           message: err.response?.data?.error || 'Could not open console',
@@ -458,6 +450,60 @@ const Proxmox = () => {
       }
     })();
   };
+
+  useEffect(() => {
+    if (!consoleDialogOpen || !consoleWsUrl) return undefined;
+    const container = consoleMountRef.current;
+    if (!container) return undefined;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const { default: RFB } = await import('@novnc/novnc/lib/rfb.js');
+        if (cancelled) return;
+        const el = consoleMountRef.current;
+        if (!el) return;
+        el.innerHTML = '';
+        const canvas = document.createElement('canvas');
+        canvas.style.width = '100%';
+        canvas.style.display = 'block';
+        canvas.style.maxHeight = 'min(75vh, 900px)';
+        el.appendChild(canvas);
+        const rfb = new RFB(canvas, consoleWsUrl, {});
+        rfb.scaleViewport = true;
+        rfb.resizeSession = true;
+        consoleRfbRef.current = rfb;
+        rfb.addEventListener('disconnect', (e) => {
+          if (e.detail.clean) return;
+          setSnackbar({
+            open: true,
+            message: e.detail.message || 'Console disconnected',
+            severity: 'warning',
+          });
+        });
+      } catch (e) {
+        setSnackbar({
+          open: true,
+          message: e?.message || 'Failed to load console client (run npm install in frontend)',
+          severity: 'error',
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (consoleRfbRef.current) {
+        try {
+          consoleRfbRef.current.disconnect();
+        } catch {
+          /* ignore */
+        }
+        consoleRfbRef.current = null;
+      }
+      if (consoleMountRef.current) consoleMountRef.current.innerHTML = '';
+    };
+  }, [consoleDialogOpen, consoleWsUrl]);
 
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
@@ -929,6 +975,50 @@ const Proxmox = () => {
               </Button>
             </>
           )}
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={consoleDialogOpen}
+        onClose={() => {
+          setConsoleDialogOpen(false);
+          setConsoleWsUrl('');
+          setConsoleFallbackUrl('');
+        }}
+        maxWidth="lg"
+        fullWidth
+        PaperProps={{ sx: { bgcolor: '#141414' } }}
+      >
+        <DialogTitle sx={{ color: 'grey.200', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+          <span>Console — {consoleTitle}</span>
+          {consoleFallbackUrl ? (
+            <Button
+              component="a"
+              href={consoleFallbackUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="small"
+              color="inherit"
+              startIcon={<ConsoleIcon />}
+            >
+              Open in Proxmox
+            </Button>
+          ) : null}
+        </DialogTitle>
+        <DialogContent sx={{ p: 0, bgcolor: '#0d0d0d' }}>
+          <Box ref={consoleMountRef} sx={{ minHeight: 400, width: '100%' }} />
+        </DialogContent>
+        <DialogActions sx={{ bgcolor: '#141414' }}>
+          <Button
+            onClick={() => {
+              setConsoleDialogOpen(false);
+              setConsoleWsUrl('');
+              setConsoleFallbackUrl('');
+            }}
+            color="inherit"
+          >
+            Close
+          </Button>
         </DialogActions>
       </Dialog>
 
