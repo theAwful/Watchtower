@@ -1629,12 +1629,10 @@ export async function getVNCConsole(node, vmid, type = 'qemu', vmname = '') {
   let port;
 
   if (isProxmoxPasswordConfigured()) {
-    const auth = await getProxmoxAuth();
     const vnc = await vncProxyWithPasswordSession(node, vmid, normalizedType);
     vncticket = vnc.ticket;
     port = vnc.port;
-    const auth = await getProxmoxAuth();
-    await verifyVncTicketForVm(auth, node, vmid, normalizedType, vncticket);
+    await verifyVncTicketForVm(await getProxmoxAuth(), node, vmid, normalizedType, vncticket);
   } else {
     const endpoint = `/nodes/${node}/${normalizedType}/${vmid}/vncproxy`;
     const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
