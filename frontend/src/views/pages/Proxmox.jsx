@@ -407,32 +407,56 @@ const Proxmox = () => {
     }
   };
 
-  const handleOpenConsole = async (vm) => {
+  const handleOpenConsole = (vm) => {
     if (vm.template) return;
     const key = powerPendingKey(vm);
-    try {
-      setConsoleOpeningKey(key);
-      const typ = vmType(vm);
-      const params = new URLSearchParams({ type: typ });
-      if (vm.name) params.set('vmname', vm.name);
-      const res = await api.get(
-        `/api/proxmox/vms/${encodeURIComponent(vm.node)}/${vm.vmid}/console?${params}`,
-      );
-      const url = res.data?.url;
-      if (!url) {
-        setSnackbar({ open: true, message: 'No console URL returned', severity: 'error' });
-        return;
-      }
-      window.open(url, '_blank', 'noopener,noreferrer');
-    } catch (err) {
-      setSnackbar({
-        open: true,
-        message: err.response?.data?.error || 'Could not open console',
-        severity: 'error',
-      });
-    } finally {
+    setConsoleOpeningKey(key);
+    setSnackbar({ open: true, message: 'Opening console…', severity: 'info' });
+
+    const win = window.open('about:blank', '_blank');
+    if (!win) {
+      setSnackbar({ open: true, message: 'Allow pop-ups for this site to open the console', severity: 'warning' });
       setConsoleOpeningKey(null);
+      return;
     }
+    try {
+      win.document.title = 'Console';
+      win.document.body.innerHTML =
+        '<p style="font-family:system-ui,sans-serif;margin:2rem;color:#888">Opening console…</p>';
+    } catch {
+      /* ignore */
+    }
+
+    (async () => {
+      try {
+        const typ = vmType(vm);
+        const params = new URLSearchParams({ type: typ });
+        if (vm.name) params.set('vmname', vm.name);
+        const res = await api.get(
+          `/api/proxmox/vms/${encodeURIComponent(vm.node)}/${vm.vmid}/console?${params}`,
+        );
+        const url = res.data?.url;
+        if (!url) {
+          win.close();
+          setSnackbar({ open: true, message: 'No console URL returned', severity: 'error' });
+          return;
+        }
+        win.location.href = url;
+      } catch (err) {
+        try {
+          win.close();
+        } catch {
+          /* ignore */
+        }
+        setSnackbar({
+          open: true,
+          message: err.response?.data?.error || 'Could not open console',
+          severity: 'error',
+        });
+      } finally {
+        setConsoleOpeningKey(null);
+      }
+    })();
   };
 
   const handleCreateFromTemplate = async () => {
@@ -500,17 +524,6 @@ const Proxmox = () => {
             <IconButton onClick={() => fetchVMs(true)} color="primary">
               <RefreshIcon />
             </IconButton>
-          </Tooltip>
-          <Tooltip title="Store Proxmox web session in this browser (needed for console when Proxmox is on the same site as Watchtower — set PROXMOX_PUBLIC_URL). Optional if you log into Proxmox directly.">
-            <Button
-              size="small"
-              variant="outlined"
-              component="a"
-              href={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/proxmox/set-session?redirect=${encodeURIComponent('/proxmox')}`}
-              sx={{ ml: 1 }}
-            >
-              Proxmox session
-            </Button>
           </Tooltip>
           <Button
             variant="contained"

@@ -1620,17 +1620,32 @@ export async function updateVMPool(vmid, type, poolid, node) {
   }
 }
 
-// noVNC + Proxmox: vncproxy with websocket=1 → vncticket + port. Build URL to match Proxmox web console (vmname, resize=off, cmd=).
+// noVNC + Proxmox: vncproxy with websocket=1 → vncticket + port; then POST /access/vncticket when using password session.
+// Prefer PROXMOX_PASSWORD: /access/ticket → vncproxy (cookie+CSRF) → /access/vncticket (VM.Console). Falls back to API token vncproxy if no password.
 // API: POST .../vncproxy with body websocket=1 → { ticket: PVEVNC:..., port }. Ticket must be in URL and URL-encoded (+ → %2B).
 export async function getVNCConsole(node, vmid, type = 'qemu', vmname = '') {
-  const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
-  const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
-  const vncticket = result?.ticket;
-  const port = result?.port != null ? result.port : 5900;
+  const normalizedType = type === 'lxc' ? 'lxc' : 'qemu';
+  let vncticket;
+  let port;
+
+  if (isProxmoxPasswordConfigured()) {
+    const auth = await getProxmoxAuth();
+    const vnc = await vncProxyWithPasswordSession(node, vmid, normalizedType);
+    vncticket = vnc.ticket;
+    port = vnc.port;
+    const auth = await getProxmoxAuth();
+    await verifyVncTicketForVm(auth, node, vmid, normalizedType, vncticket);
+  } else {
+    const endpoint = `/nodes/${node}/${normalizedType}/${vmid}/vncproxy`;
+    const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
+    vncticket = result?.ticket;
+    port = result?.port != null ? result.port : 5900;
+  }
+
   if (!vncticket || typeof vncticket !== 'string') {
     throw new Error('Proxmox vncproxy did not return a ticket');
   }
-  const consoleType = type === 'qemu' ? 'kvm' : 'lxc';
+  const consoleType = normalizedType === 'qemu' ? 'kvm' : 'lxc';
   const base = PROXMOX_PUBLIC_URL || `https://${PROXMOX_HOST}:${PROXMOX_PORT}`;
   const params = new URLSearchParams({
     console: consoleType,
@@ -1643,7 +1658,6 @@ export async function getVNCConsole(node, vmid, type = 'qemu', vmname = '') {
     vncticket,
   });
   if (vmname) params.set('vmname', vmname);
-  // Ticket contains : and often + (base64); encode so + is %2B and not interpreted as space.
   const qs = Array.from(params.entries())
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&');
@@ -1651,9 +1665,16 @@ export async function getVNCConsole(node, vmid, type = 'qemu', vmname = '') {
   return { ticket: vncticket, port, url: vncUrl };
 }
 
-/** Get vncticket + port for WebSocket proxy. Proxmox expects websocket=1 (integer), not string "true". */
+/** Get vncticket + port (same auth rules as getVNCConsole). */
 export async function getVNCWebSocketTicket(node, vmid, type = 'qemu') {
-  const endpoint = `/nodes/${node}/${type}/${vmid}/vncproxy`;
+  const normalizedType = type === 'lxc' ? 'lxc' : 'qemu';
+  if (isProxmoxPasswordConfigured()) {
+    const vnc = await vncProxyWithPasswordSession(node, vmid, normalizedType);
+    const auth = await getProxmoxAuth();
+    await verifyVncTicketForVm(auth, node, vmid, normalizedType, vnc.ticket);
+    return { ticket: vnc.ticket, port: vnc.port };
+  }
+  const endpoint = `/nodes/${node}/${normalizedType}/${vmid}/vncproxy`;
   const result = await proxmoxRequest(endpoint, 'POST', { websocket: 1 });
   const ticket = result?.ticket;
   const port = result?.port != null ? result.port : 5900;
@@ -1688,7 +1709,7 @@ export async function getProxmoxAuth() {
   return proxmoxAuthCache;
 }
 
-/** Call vncproxy with PVEAuthCookie + CSRF, body websocket=true. Returns { port, ticket } (VNC ticket). */
+/** Call vncproxy with PVEAuthCookie + CSRF, body websocket=1. Returns { port, ticket } (VNC ticket). */
 export function createVncProxySession(auth, node, vmid, type = 'qemu') {
   const path = `/api2/json/nodes/${encodeURIComponent(node)}/${encodeURIComponent(type)}/${encodeURIComponent(vmid)}/vncproxy`;
   const body = toFormUrlEncoded({ websocket: 1 });
@@ -1701,8 +1722,8 @@ export function createVncProxySession(auth, node, vmid, type = 'qemu') {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
         'Content-Length': Buffer.byteLength(body, 'utf8'),
-        'Cookie': `PVEAuthCookie=${auth.ticket}`,
-        'CSRFPreventionToken': auth.csrf,
+        Cookie: `PVEAuthCookie=${auth.ticket}`,
+        CSRFPreventionToken: auth.csrf || '',
       },
       rejectUnauthorized: false,
     };
@@ -1735,4 +1756,96 @@ export function createVncProxySession(auth, node, vmid, type = 'qemu') {
     req.write(body);
     req.end();
   });
+}
+
+/**
+ * POST /access/vncticket — verify VNC ticket against ACL (requires PVE session cookie + CSRF).
+ * @see https://pve.proxmox.com/pve-docs/api-viewer/#/access/vncticket
+ */
+function postAccessVncticket(auth, { authid, path: aclPath, privs, vncticket }) {
+  const body = toFormUrlEncoded({
+    authid,
+    path: aclPath,
+    privs,
+    vncticket,
+  });
+  return new Promise((resolve, reject) => {
+    const reqOptions = {
+      hostname: PROXMOX_HOST,
+      port: PROXMOX_PORT,
+      path: '/api2/json/access/vncticket',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Content-Length': Buffer.byteLength(body, 'utf8'),
+        Cookie: `PVEAuthCookie=${auth.ticket}`,
+        CSRFPreventionToken: auth.csrf || '',
+      },
+      rejectUnauthorized: false,
+    };
+    const req = https.request(reqOptions, (res) => {
+      const chunks = [];
+      res.setEncoding('utf8');
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        try {
+          const text = chunks.join('').trim();
+          if (res.statusCode !== 200) {
+            reject(new Error(`access/vncticket failed: ${res.statusCode} ${text.slice(0, 400)}`));
+            return;
+          }
+          if (!text.startsWith('{')) {
+            resolve(null);
+            return;
+          }
+          resolve(JSON.parse(text));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+function isProxmoxPasswordConfigured() {
+  return Boolean(PROXMOX_PASSWORD && String(PROXMOX_PASSWORD).trim());
+}
+
+async function vncProxyWithPasswordSession(node, vmid, type) {
+  const normalizedType = type === 'lxc' ? 'lxc' : 'qemu';
+  let auth = await getProxmoxAuth();
+  try {
+    return await createVncProxySession(auth, node, vmid, normalizedType);
+  } catch (_firstErr) {
+    proxmoxAuthCache = null;
+    auth = await getProxmoxAuth();
+    return createVncProxySession(auth, node, vmid, normalizedType);
+  }
+}
+
+async function verifyVncTicketForVm(auth, node, vmid, type, vncticket) {
+  const normalizedType = type === 'lxc' ? 'lxc' : 'qemu';
+  const authid = `${PROXMOX_CONSOLE_USER}@${PROXMOX_CONSOLE_REALM}`;
+  const pathsToTry = [
+    `/vms/${vmid}`,
+    `/nodes/${node}/${normalizedType}/${vmid}`,
+  ];
+  let lastErr;
+  for (const aclPath of pathsToTry) {
+    try {
+      await postAccessVncticket(auth, {
+        authid,
+        path: aclPath,
+        privs: 'VM.Console',
+        vncticket,
+      });
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('access/vncticket verification failed');
 }
