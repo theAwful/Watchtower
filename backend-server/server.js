@@ -11,7 +11,6 @@ import https from 'https';
 import http from 'http';
 import { fileURLToPath } from 'url';
 import * as proxmox from './proxmox.js';
-import { attachPveConsoleWebSocket, issuePveConsoleToken } from './pve-console-ws.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -1016,7 +1015,7 @@ app.get('/api/proxmox/set-session', async (req, res) => {
   }
 });
 
-// Console: wsProxyPath → in-app noVNC via Watchtower /ws/pve-console (proxies to Proxmox …/vncwebsocket). url = legacy Proxmox UI noVNC (needs PVE cookie on Proxmox origin unless same-site proxy).
+// Console: returns Proxmox-hosted noVNC URL (vncproxy via API token). Browser must send PVEAuthCookie for that origin — use PROXMOX_PUBLIC_URL under your reverse proxy + GET /api/proxmox/set-session, or log into Proxmox in another tab.
 app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
   try {
     const { node, vmid } = req.params;
@@ -1033,27 +1032,9 @@ app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
     if (!result?.url) {
       return res.status(502).json({ error: 'Proxmox vncproxy did not return a console URL' });
     }
-
-    let pveCookie = null;
-    if (result.authSource === 'pve_password_session') {
-      const auth = await proxmox.getProxmoxAuth();
-      pveCookie = auth.ticket;
-    }
-    const token = issuePveConsoleToken({
-      node,
-      vmid: Number(vmid),
-      type,
-      vncticket: result.ticket,
-      port: result.port,
-      pveCookie,
-    });
-    const wsProxyPath = `/ws/pve-console?token=${encodeURIComponent(token)}`;
-
     res.json({
       success: true,
       url: result.url,
-      /** Same host as the UI; browser builds ws(s):// + host + wsProxyPath (Vite proxies /ws in dev). */
-      wsProxyPath,
       /** pve_password_session = ticket from PROXMOX_USER/PROXMOX_CONSOLE_USER + PROXMOX_PASSWORD; api_token = API token only */
       authSource: result.authSource || 'unknown',
     });
@@ -1227,8 +1208,6 @@ function createServer() {
 
 const server = createServer();
 if (!server) process.exit(1);
-
-attachPveConsoleWebSocket(server);
 
 const servingHttps = server instanceof https.Server;
 if (SSL_CERT_PATH && SSL_KEY_PATH && !servingHttps) {
