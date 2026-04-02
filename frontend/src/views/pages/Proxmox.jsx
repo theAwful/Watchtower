@@ -54,14 +54,8 @@ const hasDeletionRequestTag = (vm) =>
 
 const powerPendingKey = (vm) => `${vm.node}|${vm.vmid}|${vm?.type === 'lxc' ? 'lxc' : 'qemu'}`;
 
-/** Mirrors backend slug rules for create-VM name preview. */
-const slugifySegment = (s) =>
-  String(s || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 48);
+const CREATE_PROVISION_POLL_MS = 2000;
+const CREATE_PROVISION_TIMEOUT_MS = 180000;
 
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
@@ -73,7 +67,7 @@ const Proxmox = () => {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createConfig, setCreateConfig] = useState({
     template: '',
-    operatorSlug: '',
+    operatorUserid: '',
     clientName: '',
   });
   const [operators, setOperators] = useState([]);
@@ -81,6 +75,9 @@ const Proxmox = () => {
   const [operatorsError, setOperatorsError] = useState(null);
   const [operatorsGroup, setOperatorsGroup] = useState('');
   const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [namePreview, setNamePreview] = useState('');
+  const [namePreviewLoading, setNamePreviewLoading] = useState(false);
+  const [createProvisioning, setCreateProvisioning] = useState(null);
   const [powerPending, setPowerPending] = useState({});
   const [flagDeleteDialogVm, setFlagDeleteDialogVm] = useState(null);
   const [flagDeleteSubmitting, setFlagDeleteSubmitting] = useState(false);
@@ -178,6 +175,86 @@ const Proxmox = () => {
       cancelled = true;
     };
   }, [createDialogOpen]);
+
+  useEffect(() => {
+    if (!createDialogOpen || createProvisioning) {
+      setNamePreview('');
+      setNamePreviewLoading(false);
+      return;
+    }
+    const uid = createConfig.operatorUserid;
+    const cn = createConfig.clientName;
+    if (!uid || !String(cn).trim()) {
+      setNamePreview('');
+      setNamePreviewLoading(false);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      try {
+        setNamePreviewLoading(true);
+        const r = await api.get('/api/proxmox/vm-name-preview', {
+          params: { operatorUserid: uid, clientName: cn },
+        });
+        setNamePreview(r.data?.name || '');
+      } catch {
+        setNamePreview('');
+      } finally {
+        setNamePreviewLoading(false);
+      }
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [createDialogOpen, createProvisioning, createConfig.operatorUserid, createConfig.clientName]);
+
+  useEffect(() => {
+    if (!createProvisioning?.vmid) return undefined;
+    const { vmid, deadline, name: provisionName } = createProvisioning;
+    let cancelled = false;
+
+    const check = async () => {
+      if (cancelled) return;
+      try {
+        const res = await api.get('/api/proxmox/vms');
+        const list = res.data.vms || [];
+        const found = list.some((v) => v.vmid === vmid);
+        if (found) {
+          cancelled = true;
+          const displayName = provisionName?.trim() || `VM ${vmid}`;
+          setCreateProvisioning(null);
+          setCreateDialogOpen(false);
+          setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
+          setSnackbar({
+            open: true,
+            message: `${displayName} is in the list. Clone tasks may still finish in Proxmox.`,
+            severity: 'success',
+          });
+          await fetchVMs(false);
+          return;
+        }
+        if (Date.now() > deadline) {
+          cancelled = true;
+          setCreateProvisioning(null);
+          setCreateDialogOpen(false);
+          setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
+          setSnackbar({
+            open: true,
+            message:
+              'The new VM is taking longer than expected to appear. Refresh the list or check Proxmox tasks.',
+            severity: 'warning',
+          });
+          await fetchVMs(false);
+        }
+      } catch {
+        /* keep polling until timeout */
+      }
+    };
+
+    check();
+    const id = setInterval(check, CREATE_PROVISION_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [createProvisioning, fetchVMs]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -307,51 +384,48 @@ const Proxmox = () => {
     }
   };
 
-  /** Local calendar date suffix (matches server vmNameDateSuffixLocal). */
-  const formatCloneDateSuffix = () => {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  };
-
-  const previewCloneVmName = () => {
-    const op = slugifySegment(createConfig.operatorSlug);
-    const cl = slugifySegment(createConfig.clientName);
-    if (!op || !cl) return '';
-    return `${op}-${cl}-${formatCloneDateSuffix()}`;
-  };
-
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
       return;
     }
-    if (!createConfig.operatorSlug) {
+    if (!createConfig.operatorUserid) {
       setSnackbar({ open: true, message: 'Please select an operator', severity: 'warning' });
       return;
     }
-    if (!slugifySegment(createConfig.clientName)) {
-      setSnackbar({ open: true, message: 'Enter a client name (letters or numbers)', severity: 'warning' });
+    if (!namePreview) {
+      setSnackbar({
+        open: true,
+        message: 'Enter a client name that produces a valid VM name (see preview below).',
+        severity: 'warning',
+      });
       return;
     }
     try {
       setCreateSubmitting(true);
       const response = await api.post('/api/proxmox/vms/create-from-template', {
         templateName: createConfig.template,
-        operatorSlug: createConfig.operatorSlug,
+        operatorUserid: createConfig.operatorUserid,
         clientName: createConfig.clientName,
       });
-      const { name } = response.data;
-      setSnackbar({
-        open: true,
-        message: name ? `Creating "${name}"… This can take a minute.` : 'Creating VM… This can take a minute.',
-        severity: 'success',
-      });
-      setCreateDialogOpen(false);
-      setCreateConfig({ template: '', operatorSlug: '', clientName: '' });
-      setTimeout(() => fetchVMs(), 3000);
+      const vmid = response.data?.vmid;
+      const name = response.data?.name || namePreview;
+      if (vmid != null) {
+        setCreateProvisioning({
+          vmid: Number(vmid),
+          name: String(name || ''),
+          deadline: Date.now() + CREATE_PROVISION_TIMEOUT_MS,
+        });
+      } else {
+        setSnackbar({
+          open: true,
+          message: name ? `Started creating "${name}". Refresh the list in a moment.` : 'Create request sent.',
+          severity: 'success',
+        });
+        setCreateDialogOpen(false);
+        setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
+        setTimeout(() => fetchVMs(false), 3000);
+      }
     } catch (err) {
       setSnackbar({
         open: true,
@@ -376,7 +450,10 @@ const Proxmox = () => {
           <Button
             variant="contained"
             startIcon={<AddIcon />}
-            onClick={() => setCreateDialogOpen(true)}
+            onClick={() => {
+              setCreateProvisioning(null);
+              setCreateDialogOpen(true);
+            }}
             sx={{ ml: 2 }}
           >
             Create VM
@@ -627,102 +704,138 @@ const Proxmox = () => {
         onClose={() => {
           if (createSubmitting) return;
           setCreateDialogOpen(false);
-          setCreateConfig({ template: '', operatorSlug: '', clientName: '' });
+          setCreateProvisioning(null);
+          setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
         }}
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Create VM from template</DialogTitle>
-        {createSubmitting ? <LinearProgress variant="indeterminate" /> : null}
+        <DialogTitle>
+          {createProvisioning ? 'Creating virtual machine' : 'Create VM from template'}
+        </DialogTitle>
+        {createSubmitting || createProvisioning ? (
+          <LinearProgress variant="indeterminate" />
+        ) : null}
         <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
-            <FormControl fullWidth required>
-              <InputLabel>Template</InputLabel>
-              <Select
-                value={createConfig.template}
-                onChange={(e) => setCreateConfig({ ...createConfig, template: e.target.value })}
-                label="Template"
+          {createProvisioning ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+              <Typography variant="body2" color="text.secondary">
+                Waiting for <strong>{createProvisioning.name || 'the new VM'}</strong> (VMID{' '}
+                <strong>{createProvisioning.vmid}</strong>) to show up in your pool. This usually takes under a
+                minute while Proxmox finishes the clone.
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                You can leave this dialog open; it will close when the VM appears or after a longer timeout.
+              </Typography>
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
+              <FormControl fullWidth required>
+                <InputLabel>Template</InputLabel>
+                <Select
+                  value={createConfig.template}
+                  onChange={(e) => setCreateConfig({ ...createConfig, template: e.target.value })}
+                  label="Template"
+                  disabled={createSubmitting}
+                >
+                  {TEMPLATE_OPTIONS.map((t) => (
+                    <MenuItem key={t.name} value={t.name}>
+                      {t.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
+              <FormControl fullWidth required disabled={operatorsLoading || createSubmitting}>
+                <InputLabel>Operator</InputLabel>
+                <Select
+                  value={createConfig.operatorUserid}
+                  onChange={(e) => setCreateConfig({ ...createConfig, operatorUserid: e.target.value })}
+                  label="Operator"
+                >
+                  {operators.map((op) => (
+                    <MenuItem key={op.userid} value={op.userid}>
+                      {op.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {operatorsLoading ? (
+                <Typography variant="caption" color="text.secondary">
+                  Loading operators from Proxmox…
+                </Typography>
+              ) : null}
+              {operatorsError ? (
+                <Alert severity="warning">{operatorsError}</Alert>
+              ) : null}
+              {operatorsGroup && !operatorsError ? (
+                <Typography variant="caption" color="text.secondary">
+                  Operators are members of Proxmox group <strong>{operatorsGroup}</strong>.
+                </Typography>
+              ) : null}
+
+              <TextField
+                fullWidth
+                required
+                label="Client name"
+                value={createConfig.clientName}
+                onChange={(e) => setCreateConfig({ ...createConfig, clientName: e.target.value })}
+                placeholder="e.g. Acme Red Team"
                 disabled={createSubmitting}
-              >
-                {TEMPLATE_OPTIONS.map((t) => (
-                  <MenuItem key={t.name} value={t.name}>
-                    {t.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-
-            <FormControl fullWidth required disabled={operatorsLoading || createSubmitting}>
-              <InputLabel>Operator</InputLabel>
-              <Select
-                value={createConfig.operatorSlug}
-                onChange={(e) => setCreateConfig({ ...createConfig, operatorSlug: e.target.value })}
-                label="Operator"
-              >
-                {operators.map((op) => (
-                  <MenuItem key={op.userid} value={op.slug}>
-                    {op.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            {operatorsLoading ? (
-              <Typography variant="caption" color="text.secondary">
-                Loading operators from Proxmox…
+                helperText="One word is title-cased; several words use the first letter of each word (e.g. Acme Red Team → ART)."
+              />
+              <Typography variant="caption" color="text.secondary" display="block">
+                VM name:{' '}
+                <strong>
+                  {namePreviewLoading ? '…' : namePreview || '—'}
+                </strong>
+                {namePreview ? " (operator initials + client + today's date)" : null}
               </Typography>
-            ) : null}
-            {operatorsError ? (
-              <Alert severity="warning">{operatorsError}</Alert>
-            ) : null}
-            {operatorsGroup && !operatorsError ? (
               <Typography variant="caption" color="text.secondary">
-                Operators are members of Proxmox group <strong>{operatorsGroup}</strong>.
+                New VMs are added to the operators pool.
               </Typography>
-            ) : null}
-
-            <TextField
-              fullWidth
-              required
-              label="Client name"
-              value={createConfig.clientName}
-              onChange={(e) => setCreateConfig({ ...createConfig, clientName: e.target.value })}
-              placeholder="e.g. Acme Corp or project id"
-              disabled={createSubmitting}
-              helperText="Used in the VM name only. Use letters, numbers, or spaces (normalized to hyphens)."
-            />
-            <Typography variant="caption" color="text.secondary" display="block">
-              VM name will be:{' '}
-              <strong>{previewCloneVmName() || '—'}</strong>
-              {' '}(operator + client + today&apos;s date)
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              New VMs are added to the operators pool.
-            </Typography>
-          </Box>
+            </Box>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button
-            onClick={() => {
-              setCreateDialogOpen(false);
-              setCreateConfig({ template: '', operatorSlug: '', clientName: '' });
-            }}
-            disabled={createSubmitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={handleCreateFromTemplate}
-            variant="contained"
-            disabled={
-              !createConfig.template ||
-              !createConfig.operatorSlug ||
-              !slugifySegment(createConfig.clientName) ||
-              createSubmitting ||
-              operatorsLoading
-            }
-          >
-            {createSubmitting ? 'Creating…' : 'Create VM'}
-          </Button>
+          {createProvisioning ? (
+            <Button
+              onClick={() => {
+                setCreateProvisioning(null);
+                setCreateDialogOpen(false);
+                setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
+                fetchVMs(false);
+              }}
+            >
+              Dismiss
+            </Button>
+          ) : (
+            <>
+              <Button
+                onClick={() => {
+                  setCreateDialogOpen(false);
+                  setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
+                }}
+                disabled={createSubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleCreateFromTemplate}
+                variant="contained"
+                disabled={
+                  !createConfig.template ||
+                  !createConfig.operatorUserid ||
+                  !namePreview ||
+                  namePreviewLoading ||
+                  createSubmitting ||
+                  operatorsLoading
+                }
+              >
+                {createSubmitting ? 'Creating…' : 'Create VM'}
+              </Button>
+            </>
+          )}
         </DialogActions>
       </Dialog>
 

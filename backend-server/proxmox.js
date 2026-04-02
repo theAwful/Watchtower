@@ -968,9 +968,108 @@ export function getOperatorsGroupId() {
   return OPERATORS_GROUP;
 }
 
+function upperInitial(ch) {
+  if (!ch) return '';
+  return ch.toUpperCase();
+}
+
+/** First + last initial (uppercase); fallback from login local part if names missing. */
+export function operatorInitialsFromUser(cfg, localPartFallback = '') {
+  const f = String(cfg?.firstname || '').trim();
+  const l = String(cfg?.lastname || '').trim();
+  if (f && l) {
+    const a = upperInitial(f[0]);
+    const b = upperInitial(l[0]);
+    if (a && b) return `${a}${b}`;
+  }
+  if (f.length >= 2) {
+    return `${upperInitial(f[0])}${upperInitial(f[1])}`;
+  }
+  if (f.length === 1 && l.length >= 1) {
+    return `${upperInitial(f[0])}${upperInitial(l[0])}`;
+  }
+  if (f.length === 1) {
+    const second = l[0] ? upperInitial(l[0]) : upperInitial(f[0]);
+    return `${upperInitial(f[0])}${second || 'X'}`;
+  }
+  const loc = String(localPartFallback || '').replace(/[^a-zA-Z0-9]/g, '');
+  if (loc.length >= 2) return loc.slice(0, 2).toUpperCase();
+  if (loc.length === 1) return `${loc[0].toUpperCase()}X`;
+  return 'OP';
+}
+
 /**
- * VM name: operatorSlug-clientSlug-YYYY-MM-DD (used for Proxmox guest name).
- * @param {string} dateSuffix - YYYY-MM-DD
+ * One word: TitleCase alphanumeric. Multiple words: first letter of each word (uppercase), concatenated.
+ */
+export function clientSegmentFromInput(clientRaw) {
+  const words = String(clientRaw || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return '';
+  if (words.length === 1) {
+    const w = words[0].replace(/[^a-zA-Z0-9]/g, '');
+    if (!w) return '';
+    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  }
+  const letters = words
+    .map((w) => {
+      const c = w.replace(/[^a-zA-Z0-9]/g, '');
+      return c ? c[0].toUpperCase() : '';
+    })
+    .filter(Boolean)
+    .join('');
+  return letters;
+}
+
+export async function getAccessUserConfig(userid) {
+  return proxmoxRequest(`/access/users/${encodeURIComponent(userid)}`);
+}
+
+function userGroupList(cfg) {
+  const groups = cfg?.groups;
+  if (Array.isArray(groups)) return groups.map((g) => String(g).trim());
+  if (typeof groups === 'string') {
+    return groups.split(/[,;]/).map((g) => g.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+/** Throws if user missing, disabled, or not in operators group. */
+export async function assertUserInOperatorsGroup(userid) {
+  if (!userid || typeof userid !== 'string') {
+    throw new Error('operatorUserid is required');
+  }
+  const cfg = await getAccessUserConfig(userid);
+  const enable = cfg?.enable;
+  if (enable === 0 || enable === false || enable === '0') {
+    throw new Error('Operator account is disabled');
+  }
+  const groupList = userGroupList(cfg);
+  if (!groupList.includes(OPERATORS_GROUP)) {
+    throw new Error(`User is not in group "${OPERATORS_GROUP}"`);
+  }
+  return cfg;
+}
+
+/**
+ * VM name: OperatorInitials-ClientSegment-YYYY-MM-DD
+ */
+export function buildVmNameFromOperatorAndClient(cfg, clientRaw, dateSuffix, localPartFallback) {
+  const op = operatorInitialsFromUser(cfg, localPartFallback);
+  const cl = clientSegmentFromInput(clientRaw);
+  const d = String(dateSuffix || '').trim();
+  if (!cl) {
+    throw new Error('Client name must include at least one letter or number');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    throw new Error('Invalid date suffix for VM name');
+  }
+  return `${op}-${cl}-${d}`;
+}
+
+/**
+ * @deprecated Prefer buildVmNameFromOperatorAndClient + assertUserInOperatorsGroup
  */
 export function buildOperatorClientVmName(operatorSlug, clientName, dateSuffix) {
   const op = slugifyNameSegment(operatorSlug);
@@ -995,7 +1094,7 @@ export function vmNameDateSuffixLocal() {
 
 /**
  * Users in {@link OPERATORS_GROUP} for the Create VM operator list.
- * API: GET /access/users, GET /access/users/{userid} when groups not on index.
+ * Fetches full /access/users/{userid} per member for display name and group check.
  */
 export async function getOperatorUsersForUI() {
   const raw = await proxmoxRequest('/access/users');
@@ -1003,50 +1102,33 @@ export async function getOperatorUsersForUI() {
     ? raw
     : (raw && typeof raw === 'object' ? Object.values(raw) : []);
   const out = [];
-  const seenSlugs = new Map();
 
   for (const item of list) {
     const userid = typeof item === 'string' ? item : item?.userid;
     if (!userid || typeof userid !== 'string') continue;
 
-    let groups = item.groups;
-    let enable = item.enable;
-    if (groups == null || enable === undefined) {
-      try {
-        const full = await proxmoxRequest(`/access/users/${encodeURIComponent(userid)}`);
-        groups = full?.groups;
-        enable = full?.enable;
-      } catch {
-        continue;
-      }
+    let full;
+    try {
+      full = await proxmoxRequest(`/access/users/${encodeURIComponent(userid)}`);
+    } catch {
+      continue;
     }
 
+    const enable = full?.enable;
     if (enable === 0 || enable === false || enable === '0') continue;
 
-    const groupList = Array.isArray(groups)
-      ? groups.map((g) => String(g).trim())
-      : typeof groups === 'string'
-        ? groups.split(/[,;]/).map((g) => g.trim()).filter(Boolean)
-        : [];
+    const groupList = userGroupList(full);
     if (!groupList.includes(OPERATORS_GROUP)) continue;
 
     const at = userid.indexOf('@');
     const localPart = at >= 0 ? userid.slice(0, at) : userid;
-    const realm = at >= 0 ? userid.slice(at + 1) : 'pam';
-    let slug = `${slugifyNameSegment(localPart)}-${slugifyNameSegment(realm)}`;
-    if (!slug || slug === '-') slug = 'operator';
-
-    if (seenSlugs.has(slug)) {
-      let n = 2;
-      while (seenSlugs.has(`${slug}-${n}`)) n += 1;
-      slug = `${slug}-${n}`;
-    }
-    seenSlugs.set(slug, true);
+    const first = String(full?.firstname || '').trim();
+    const last = String(full?.lastname || '').trim();
+    const displayName = [first, last].filter(Boolean).join(' ').trim() || localPart;
 
     out.push({
       userid,
-      label: at >= 0 ? `${localPart} (${realm})` : localPart,
-      slug,
+      label: displayName,
     });
   }
 

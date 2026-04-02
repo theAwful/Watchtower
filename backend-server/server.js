@@ -602,6 +602,29 @@ app.get('/api/proxmox/operators', async (req, res) => {
   }
 });
 
+// Preview VM name for Create VM (operator userid + client label; matches create-from-template naming)
+app.get('/api/proxmox/vm-name-preview', async (req, res) => {
+  const operatorUserid = String(req.query.operatorUserid || '').trim();
+  const clientName = String(req.query.clientName || '').trim();
+  if (!operatorUserid) {
+    return res.status(400).json({ error: 'operatorUserid is required' });
+  }
+  try {
+    const cfg = await proxmox.assertUserInOperatorsGroup(operatorUserid);
+    const at = operatorUserid.indexOf('@');
+    const localPart = at >= 0 ? operatorUserid.slice(0, at) : operatorUserid;
+    const name = proxmox.buildVmNameFromOperatorAndClient(
+      cfg,
+      clientName,
+      proxmox.vmNameDateSuffixLocal(),
+      localPart,
+    );
+    res.json({ name });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Could not build VM name preview' });
+  }
+});
+
 // Get next available VMID
 app.get('/api/proxmox/next-vmid', async (req, res) => {
   try {
@@ -623,6 +646,7 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
       templateNode,
       templateName,
       name,
+      operatorUserid,
       operatorSlug,
       clientName,
       vmid,
@@ -640,9 +664,24 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
     }
 
     let finalName;
+    const opUser = operatorUserid != null ? String(operatorUserid).trim() : '';
     const op = operatorSlug != null ? String(operatorSlug).trim() : '';
     const cl = clientName != null ? String(clientName).trim() : '';
-    if (op && cl) {
+    if (opUser && cl) {
+      try {
+        const cfg = await proxmox.assertUserInOperatorsGroup(opUser);
+        const at = opUser.indexOf('@');
+        const localPart = at >= 0 ? opUser.slice(0, at) : opUser;
+        finalName = proxmox.buildVmNameFromOperatorAndClient(
+          cfg,
+          cl,
+          proxmox.vmNameDateSuffixLocal(),
+          localPart,
+        );
+      } catch (e) {
+        return res.status(400).json({ error: e.message || 'Invalid operator or client name' });
+      }
+    } else if (op && cl) {
       try {
         finalName = proxmox.buildOperatorClientVmName(op, cl, proxmox.vmNameDateSuffixLocal());
       } catch (e) {
@@ -652,7 +691,8 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
       finalName = String(name).trim();
     } else {
       return res.status(400).json({
-        error: 'operatorSlug and clientName are required (or provide name for automation-only use)',
+        error:
+          'operatorUserid and clientName are required (legacy: operatorSlug + clientName, or name for automation-only use)',
       });
     }
 
@@ -674,6 +714,7 @@ app.post('/api/proxmox/vms/create-from-template', async (req, res) => {
       vmid: result?.vmid,
       node: result?.node,
       name: result?.name || finalName || null,
+      operatorUserid: opUser || null,
       operatorSlug: op || null,
       user: req.session?.user?.username || null,
     });
@@ -1129,16 +1170,30 @@ if (frontendExists) {
 // HTTPS: set SSL_CERT_PATH and SSL_KEY_PATH in .env to serve over https (e.g. IP:port)
 const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
 const SSL_KEY_PATH = process.env.SSL_KEY_PATH;
+/** Optional intermediate / chain (e.g. Let's Encrypt chain.pem) — helps some clients verify the cert */
+const SSL_CA_PATH = process.env.SSL_CA_PATH || process.env.SSL_CHAIN_PATH;
 
 function createServer() {
-  if (SSL_CERT_PATH && SSL_KEY_PATH) {
+  const sslRequested = !!(SSL_CERT_PATH && SSL_KEY_PATH);
+  if (sslRequested) {
     try {
       const key = fs.readFileSync(SSL_KEY_PATH, 'utf8');
       const cert = fs.readFileSync(SSL_CERT_PATH, 'utf8');
-      return https.createServer({ key, cert }, app);
+      const opts = { key, cert };
+      if (SSL_CA_PATH) {
+        try {
+          opts.ca = fs.readFileSync(SSL_CA_PATH, 'utf8');
+        } catch (caErr) {
+          console.error('Failed to read SSL_CA_PATH / SSL_CHAIN_PATH:', caErr.message);
+        }
+      }
+      return https.createServer(opts, app);
     } catch (err) {
       console.error('Failed to load SSL cert/key:', err.message);
       console.error('Check SSL_CERT_PATH and SSL_KEY_PATH in .env. Falling back to HTTP.');
+      console.error(
+        'If the UI is opened with https:// while the process is HTTP-only, the browser will report an SSL protocol error.',
+      );
     }
   }
   return http.createServer(app);
@@ -1147,8 +1202,21 @@ function createServer() {
 const server = createServer();
 if (!server) process.exit(1);
 
+const servingHttps = server instanceof https.Server;
+if (SSL_CERT_PATH && SSL_KEY_PATH && !servingHttps) {
+  console.warn(
+    '[TLS] SSL_CERT_PATH and SSL_KEY_PATH are set but the server is not using HTTPS (load failed). Use http:// or fix cert paths.',
+  );
+}
+
 const onListen = () => {
-  console.log(`Watchtower Server running on port ${PORT} (${SSL_CERT_PATH ? 'HTTPS' : 'HTTP'})`);
+  const mode = servingHttps ? 'HTTPS' : 'HTTP';
+  console.log(`Watchtower Server running on port ${PORT} (${mode})`);
+  if (servingHttps && process.env.NODE_ENV === 'production' && process.env.HTTPS !== '1') {
+    console.warn(
+      '[TLS] Set HTTPS=1 in production so session cookies use the Secure flag when serving over HTTPS.',
+    );
+  }
   console.log(`OpenVPN Management Interface: ${OPENVPN_HOST}:${OPENVPN_PORT}`);
   if (process.env.PROXMOX_HOST) {
     console.log(`Proxmox API: ${process.env.PROXMOX_HOST}:${process.env.PROXMOX_PORT || 8006}`);

@@ -17,7 +17,7 @@ services:
     env_file:
       - .env
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/api/health',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.exit(r.statusCode===200?0:1))}).on('error',()=>process.exit(1))"]
+      test: ["CMD", "node", "/app/backend-server/healthcheck.mjs"]
       interval: 30s
       timeout: 10s
       retries: 3
