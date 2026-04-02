@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -57,6 +57,34 @@ const powerPendingKey = (vm) => `${vm.node}|${vm.vmid}|${vm?.type === 'lxc' ? 'l
 const CREATE_PROVISION_POLL_MS = 3000;
 const CREATE_PROVISION_TIMEOUT_MS = 600000;
 
+/** Same vmid + final name checks as create provisioning (must match API list row). */
+function vmCloneMatchesProvision(v, vmid, provisionName) {
+  if (Number(v?.vmid) !== Number(vmid)) return false;
+  const actual = String(v.name || '').trim().toLowerCase();
+  if (!actual) return false;
+  const expected = String(provisionName || '').trim().toLowerCase();
+  if (expected) {
+    return actual === expected;
+  }
+  const id = String(vmid);
+  const generic = new Set([`vm-${id}`, `vm ${id}`, `vmid-${id}`, id]);
+  return !generic.has(actual);
+}
+
+/** Same filtering as the VM table (status + search) — provisioning completes only when the row is visible here. */
+function getTableVisibleVms(vms, statusFilter, searchQuery) {
+  const filteredVms =
+    statusFilter === STATUS_FILTER_RUNNING ? vms.filter((vm) => vm.status === 'running') : vms;
+  const searchLower = searchQuery.trim().toLowerCase();
+  if (!searchLower) return filteredVms;
+  return filteredVms.filter(
+    (vm) =>
+      (vm.name && vm.name.toLowerCase().includes(searchLower)) ||
+      String(vm.vmid).includes(searchQuery.trim()) ||
+      (vm.ip && vm.ip.includes(searchQuery.trim())),
+  );
+}
+
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,6 +109,8 @@ const Proxmox = () => {
   const [flagDeleteDialogVm, setFlagDeleteDialogVm] = useState(null);
   const [flagDeleteSubmitting, setFlagDeleteSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
+
+  const provisionCompleteFiredRef = useRef(false);
 
   const formatBytes = (bytes) => {
     if (!bytes || bytes === 0) return '0 B';
@@ -208,62 +238,44 @@ const Proxmox = () => {
 
   useEffect(() => {
     if (!createProvisioning?.vmid) return undefined;
-    const { vmid, deadline, name: provisionName, timedOut } = createProvisioning;
-    let cancelled = false;
+    const { timedOut, deadline } = createProvisioning;
 
-    const vmidsMatch = (a, b) => Number(a) === Number(b);
-
-    const cloneLooksComplete = (v) => {
-      if (!vmidsMatch(v.vmid, vmid)) return false;
-      const actual = String(v.name || '').trim().toLowerCase();
-      if (!actual) return false;
-      const expected = String(provisionName || '').trim().toLowerCase();
-      if (expected) {
-        return actual === expected;
-      }
-      const id = String(vmid);
-      const generic = new Set([`vm-${id}`, `vm ${id}`, `vmid-${id}`, id]);
-      return !generic.has(actual);
-    };
-
-    const check = async () => {
-      if (cancelled) return;
-      try {
-        const res = await api.get('/api/proxmox/vms');
-        const list = res.data.vms || [];
-        const found = list.some(cloneLooksComplete);
-        if (found) {
-          cancelled = true;
-          const displayName = provisionName?.trim() || `VM ${vmid}`;
-          setCreateProvisioning(null);
-          setCreateDialogOpen(false);
-          setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
-          setSnackbar({
-            open: true,
-            message: `${displayName} is ready.`,
-            severity: 'success',
-          });
-          await fetchVMs(false, { silent: true });
-          return;
-        }
-        if (!timedOut && Date.now() > deadline) {
-          cancelled = true;
-          setCreateProvisioning((p) => (p && !p.timedOut ? { ...p, timedOut: true } : p));
-          await fetchVMs(false, { silent: true });
-        }
-      } catch {
-        /* transient Proxmox/API errors while cloning — keep polling */
+    const tick = async () => {
+      await fetchVMs(false, { silent: true });
+      if (!timedOut && Date.now() > deadline) {
+        setCreateProvisioning((p) => (p && !p.timedOut ? { ...p, timedOut: true } : p));
       }
     };
 
     const intervalMs = timedOut ? 15000 : CREATE_PROVISION_POLL_MS;
-    check();
-    const id = setInterval(check, intervalMs);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+    tick();
+    const id = setInterval(tick, intervalMs);
+    return () => clearInterval(id);
   }, [createProvisioning, fetchVMs]);
+
+  useEffect(() => {
+    if (!createProvisioning?.vmid) {
+      provisionCompleteFiredRef.current = false;
+      return;
+    }
+    if (provisionCompleteFiredRef.current) return;
+
+    const { vmid, name: provisionName } = createProvisioning;
+    const visible = getTableVisibleVms(vms, statusFilter, searchQuery);
+    const hit = visible.some((v) => vmCloneMatchesProvision(v, vmid, provisionName));
+    if (!hit) return;
+
+    provisionCompleteFiredRef.current = true;
+    const displayName = provisionName?.trim() || `VM ${vmid}`;
+    setCreateProvisioning(null);
+    setCreateDialogOpen(false);
+    setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
+    setSnackbar({
+      open: true,
+      message: `${displayName} is ready.`,
+      severity: 'success',
+    });
+  }, [vms, createProvisioning, statusFilter, searchQuery]);
 
   useEffect(() => {
     const onVisibilityChange = () => {
@@ -420,6 +432,9 @@ const Proxmox = () => {
       const vmid = response.data?.vmid;
       const name = response.data?.name || namePreview;
       if (vmid != null) {
+        provisionCompleteFiredRef.current = false;
+        setStatusFilter(STATUS_FILTER_ALL);
+        setSearchQuery('');
         setCreateProvisioning({
           vmid: Number(vmid),
           name: String(name || ''),
