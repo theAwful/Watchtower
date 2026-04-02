@@ -998,21 +998,37 @@ export function operatorInitialsFromUser(cfg, localPartFallback = '') {
   return 'OP';
 }
 
-function titleCaseWordToken(raw) {
+/**
+ * Per whitespace-separated word:
+ * - Mixed upper+lower (e.g. TMSpotlight, McDonald) → keep as-is.
+ * - All uppercase letters (e.g. TM, OGB) → keep uppercase.
+ * - All lowercase → title case (Spotlight).
+ */
+function formatClientWord(raw) {
   const cleaned = String(raw).replace(/[^a-zA-Z0-9]/g, '');
   if (!cleaned) return '';
   if (/^\d+$/.test(cleaned)) return cleaned;
+
+  const hasLower = /[a-z]/.test(cleaned);
+  const hasUpper = /[A-Z]/.test(cleaned);
+
+  if (hasLower && hasUpper) {
+    return cleaned;
+  }
+  if (hasUpper && !hasLower) {
+    return cleaned.toUpperCase();
+  }
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase();
 }
 
-/** Whitespace-separated words, each title-cased, joined with hyphens (DNS-friendly VM segment). */
+/** Space-separated words formatted per {@link formatClientWord}, joined with hyphens. */
 export function clientSegmentFromInput(clientRaw) {
   const words = String(clientRaw || '')
     .trim()
     .split(/\s+/)
     .filter(Boolean);
-  const parts = words.map((w) => titleCaseWordToken(w)).filter(Boolean);
-  return parts.join('-');
+  if (words.length === 0) return '';
+  return words.map((w) => formatClientWord(w)).filter(Boolean).join('-');
 }
 
 export async function getAccessUserConfig(userid) {

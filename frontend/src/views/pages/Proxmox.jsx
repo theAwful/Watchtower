@@ -54,8 +54,8 @@ const hasDeletionRequestTag = (vm) =>
 
 const powerPendingKey = (vm) => `${vm.node}|${vm.vmid}|${vm?.type === 'lxc' ? 'lxc' : 'qemu'}`;
 
-const CREATE_PROVISION_POLL_MS = 2000;
-const CREATE_PROVISION_TIMEOUT_MS = 180000;
+const CREATE_PROVISION_POLL_MS = 3000;
+const CREATE_PROVISION_TIMEOUT_MS = 600000;
 
 const Proxmox = () => {
   const [vms, setVms] = useState([]);
@@ -100,7 +100,8 @@ const Proxmox = () => {
     return `${minutes}m`;
   };
 
-  const fetchVMs = useCallback(async (showLoading = false) => {
+  const fetchVMs = useCallback(async (showLoading = false, options = {}) => {
+    const silent = options.silent === true;
     try {
       if (showLoading) setLoading(true);
       const response = await api.get('/api/proxmox/vms');
@@ -132,7 +133,9 @@ const Proxmox = () => {
       });
     } catch (err) {
       console.error('Error fetching VMs:', err);
-      setError(err.response?.data?.error || 'Failed to fetch VMs');
+      if (!silent) {
+        setError(err.response?.data?.error || 'Failed to fetch VMs');
+      }
     } finally {
       if (showLoading) setLoading(false);
     }
@@ -145,7 +148,7 @@ const Proxmox = () => {
   useEffect(() => {
     if (Object.keys(powerPending).length === 0) return undefined;
     const id = setInterval(() => {
-      fetchVMs(false);
+      fetchVMs(false, { silent: true });
     }, 2000);
     return () => clearInterval(id);
   }, [powerPending, fetchVMs]);
@@ -205,15 +208,17 @@ const Proxmox = () => {
 
   useEffect(() => {
     if (!createProvisioning?.vmid) return undefined;
-    const { vmid, deadline, name: provisionName } = createProvisioning;
+    const { vmid, deadline, name: provisionName, timedOut } = createProvisioning;
     let cancelled = false;
+
+    const vmidsMatch = (a, b) => Number(a) === Number(b);
 
     const check = async () => {
       if (cancelled) return;
       try {
         const res = await api.get('/api/proxmox/vms');
         const list = res.data.vms || [];
-        const found = list.some((v) => v.vmid === vmid);
+        const found = list.some((v) => vmidsMatch(v.vmid, vmid));
         if (found) {
           cancelled = true;
           const displayName = provisionName?.trim() || `VM ${vmid}`;
@@ -222,32 +227,25 @@ const Proxmox = () => {
           setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
           setSnackbar({
             open: true,
-            message: `${displayName} is in the list. Clone tasks may still finish in Proxmox.`,
+            message: `${displayName} is ready.`,
             severity: 'success',
           });
-          await fetchVMs(false);
+          await fetchVMs(false, { silent: true });
           return;
         }
-        if (Date.now() > deadline) {
+        if (!timedOut && Date.now() > deadline) {
           cancelled = true;
-          setCreateProvisioning(null);
-          setCreateDialogOpen(false);
-          setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
-          setSnackbar({
-            open: true,
-            message:
-              'The new VM is taking longer than expected to appear. Refresh the list or check Proxmox tasks.',
-            severity: 'warning',
-          });
-          await fetchVMs(false);
+          setCreateProvisioning((p) => (p && !p.timedOut ? { ...p, timedOut: true } : p));
+          await fetchVMs(false, { silent: true });
         }
       } catch {
-        /* keep polling until timeout */
+        /* transient Proxmox/API errors while cloning — keep polling */
       }
     };
 
+    const intervalMs = timedOut ? 15000 : CREATE_PROVISION_POLL_MS;
     check();
-    const id = setInterval(check, CREATE_PROVISION_POLL_MS);
+    const id = setInterval(check, intervalMs);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -259,7 +257,7 @@ const Proxmox = () => {
       const visible = document.visibilityState === 'visible';
       setIsPageVisible(visible);
       if (visible) {
-        fetchVMs();
+        fetchVMs(false, { silent: true });
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -267,7 +265,7 @@ const Proxmox = () => {
   }, [fetchVMs]);
 
   useInterval(() => {
-    fetchVMs();
+    fetchVMs(false, { silent: true });
   }, isPageVisible ? VM_POLL_INTERVAL_MS : null);
 
   const filteredVms = statusFilter === STATUS_FILTER_RUNNING
@@ -302,7 +300,7 @@ const Proxmox = () => {
       }));
       await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/start?type=${vmType(vm)}`);
       setSnackbar({ open: true, message: 'Starting…', severity: 'info' });
-      await fetchVMs(false);
+      await fetchVMs(false, { silent: true });
     } catch (err) {
       setPowerPending((p) => {
         const n = { ...p };
@@ -322,7 +320,7 @@ const Proxmox = () => {
       }));
       await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/stop?type=${vmType(vm)}`);
       setSnackbar({ open: true, message: 'Stopping…', severity: 'info' });
-      await fetchVMs(false);
+      await fetchVMs(false, { silent: true });
     } catch (err) {
       setPowerPending((p) => {
         const n = { ...p };
@@ -347,7 +345,7 @@ const Proxmox = () => {
       }));
       await api.post(`/api/proxmox/vms/${vm.node}/${vm.vmid}/restart?type=${vmType(vm)}`);
       setSnackbar({ open: true, message: 'Restarting…', severity: 'info' });
-      await fetchVMs(false);
+      await fetchVMs(false, { silent: true });
     } catch (err) {
       setPowerPending((p) => {
         const n = { ...p };
@@ -370,7 +368,7 @@ const Proxmox = () => {
         : `${displayName} has been flagged for deletion.`;
       setSnackbar({ open: true, message: msg, severity: 'success' });
       setFlagDeleteDialogVm(null);
-      setTimeout(() => fetchVMs(), 1500);
+      setTimeout(() => fetchVMs(false, { silent: true }), 1500);
     } catch (err) {
       setSnackbar({
         open: true,
@@ -422,7 +420,7 @@ const Proxmox = () => {
         });
         setCreateDialogOpen(false);
         setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
-        setTimeout(() => fetchVMs(false), 3000);
+        setTimeout(() => fetchVMs(false, { silent: true }), 3000);
       }
     } catch (err) {
       setSnackbar({
@@ -718,13 +716,15 @@ const Proxmox = () => {
           {createProvisioning ? (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
               <Typography variant="body2" color="text.secondary">
-                Waiting for <strong>{createProvisioning.name || 'the new VM'}</strong> (VMID{' '}
-                <strong>{createProvisioning.vmid}</strong>) to show up in your pool. This usually takes under a
-                minute while Proxmox finishes the clone.
+                <strong>{createProvisioning.name || `VM ${createProvisioning.vmid}`}</strong> — waiting until it
+                appears in the list below.
               </Typography>
-              <Typography variant="caption" color="text.secondary">
-                You can leave this dialog open; it will close when the VM appears or after a longer timeout.
-              </Typography>
+              {createProvisioning.timedOut ? (
+                <Alert severity="info">
+                  Taking longer than usual. Refresh the page or check Proxmox; we&apos;ll keep checking in the
+                  background until it shows up or you dismiss.
+                </Alert>
+              ) : null}
             </Box>
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
@@ -776,12 +776,14 @@ const Proxmox = () => {
                 placeholder="e.g. Old Glory Bank"
                 disabled={createSubmitting}
               />
-              <Typography variant="caption" color="text.secondary" display="block">
-                VM name:{' '}
-                <strong>
-                  {namePreviewLoading ? '…' : namePreview || '—'}
-                </strong>
-              </Typography>
+              {createConfig.operatorUserid && createConfig.clientName.trim() ? (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  VM name:{' '}
+                  <strong>
+                    {namePreviewLoading ? '…' : namePreview || '—'}
+                  </strong>
+                </Typography>
+              ) : null}
             </Box>
           )}
         </DialogContent>
@@ -792,7 +794,7 @@ const Proxmox = () => {
                 setCreateProvisioning(null);
                 setCreateDialogOpen(false);
                 setCreateConfig({ template: '', operatorUserid: '', clientName: '' });
-                fetchVMs(false);
+                fetchVMs(false, { silent: true });
               }}
             >
               Dismiss
