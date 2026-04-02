@@ -213,12 +213,25 @@ const Proxmox = () => {
 
     const vmidsMatch = (a, b) => Number(a) === Number(b);
 
+    const cloneLooksComplete = (v) => {
+      if (!vmidsMatch(v.vmid, vmid)) return false;
+      const actual = String(v.name || '').trim().toLowerCase();
+      if (!actual) return false;
+      const expected = String(provisionName || '').trim().toLowerCase();
+      if (expected) {
+        return actual === expected;
+      }
+      const id = String(vmid);
+      const generic = new Set([`vm-${id}`, `vm ${id}`, `vmid-${id}`, id]);
+      return !generic.has(actual);
+    };
+
     const check = async () => {
       if (cancelled) return;
       try {
         const res = await api.get('/api/proxmox/vms');
         const list = res.data.vms || [];
-        const found = list.some((v) => vmidsMatch(v.vmid, vmid));
+        const found = list.some(cloneLooksComplete);
         if (found) {
           cancelled = true;
           const displayName = provisionName?.trim() || `VM ${vmid}`;
@@ -716,8 +729,13 @@ const Proxmox = () => {
           {createProvisioning ? (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 2 }}>
               <Typography variant="body2" color="text.secondary">
-                <strong>{createProvisioning.name || `VM ${createProvisioning.vmid}`}</strong> — waiting until it
-                appears in the list below.
+                Waiting for <strong>{createProvisioning.name || 'the new VM'}</strong> (VMID{' '}
+                <strong>{createProvisioning.vmid}</strong>) to show up in your pool. This usually takes under a
+                minute while Proxmox finishes the clone.
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                This dialog closes when the VM appears in the list with its final name. You can leave it open or
+                dismiss anytime.
               </Typography>
               {createProvisioning.timedOut ? (
                 <Alert severity="info">
