@@ -34,7 +34,6 @@ import {
   Refresh as RefreshIcon,
   Add as AddIcon,
   DeleteOutline as DeleteOutlineIcon,
-  OpenInNew as ConsoleIcon,
 } from '@mui/icons-material';
 import api from '../../models/ApiModel';
 import { useInterval } from '../../controllers/useInterval';
@@ -110,8 +109,6 @@ const Proxmox = () => {
   const [flagDeleteDialogVm, setFlagDeleteDialogVm] = useState(null);
   const [flagDeleteSubmitting, setFlagDeleteSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
-  const [consoleOpeningKey, setConsoleOpeningKey] = useState(null);
-
   const provisionCompleteFiredRef = useRef(false);
 
   const formatBytes = (bytes) => {
@@ -407,58 +404,6 @@ const Proxmox = () => {
     }
   };
 
-  const handleOpenConsole = (vm) => {
-    if (vm.template) return;
-    const key = powerPendingKey(vm);
-    setConsoleOpeningKey(key);
-    setSnackbar({ open: true, message: 'Opening console…', severity: 'info' });
-
-    const win = window.open('about:blank', '_blank');
-    if (!win) {
-      setSnackbar({ open: true, message: 'Allow pop-ups for this site to open the console', severity: 'warning' });
-      setConsoleOpeningKey(null);
-      return;
-    }
-    try {
-      win.document.title = 'Console';
-      win.document.body.innerHTML =
-        '<p style="font-family:system-ui,sans-serif;margin:2rem;color:#888">Opening console…</p>';
-    } catch {
-      /* ignore */
-    }
-
-    (async () => {
-      try {
-        const typ = vmType(vm);
-        const params = new URLSearchParams({ type: typ });
-        if (vm.name) params.set('vmname', vm.name);
-        const res = await api.get(
-          `/api/proxmox/vms/${encodeURIComponent(vm.node)}/${vm.vmid}/console?${params}`,
-        );
-        const url = res.data?.url;
-        if (!url) {
-          win.close();
-          setSnackbar({ open: true, message: 'No console URL returned', severity: 'error' });
-          return;
-        }
-        win.location.href = url;
-      } catch (err) {
-        try {
-          win.close();
-        } catch {
-          /* ignore */
-        }
-        setSnackbar({
-          open: true,
-          message: err.response?.data?.error || 'Could not open console',
-          severity: 'error',
-        });
-      } finally {
-        setConsoleOpeningKey(null);
-      }
-    })();
-  };
-
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
@@ -680,22 +625,6 @@ const Proxmox = () => {
                     </TableCell>
                     <TableCell align="center" sx={{ textAlign: 'center' }}>
                       <Box component="span" sx={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: 0 }}>
-                        <Tooltip title="Console (opens Proxmox noVNC in a new tab)">
-                          <span>
-                            <IconButton
-                              size="small"
-                              onClick={() => handleOpenConsole(vm)}
-                              disabled={
-                                !!vm.template ||
-                                !!powerPending[powerPendingKey(vm)] ||
-                                consoleOpeningKey === powerPendingKey(vm)
-                              }
-                              color="primary"
-                            >
-                              <ConsoleIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
                         <Tooltip title="Start">
                           <span>
                             <IconButton
