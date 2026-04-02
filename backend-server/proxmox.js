@@ -998,28 +998,21 @@ export function operatorInitialsFromUser(cfg, localPartFallback = '') {
   return 'OP';
 }
 
-/**
- * One word: TitleCase alphanumeric. Multiple words: first letter of each word (uppercase), concatenated.
- */
+function titleCaseWordToken(raw) {
+  const cleaned = String(raw).replace(/[^a-zA-Z0-9]/g, '');
+  if (!cleaned) return '';
+  if (/^\d+$/.test(cleaned)) return cleaned;
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase();
+}
+
+/** Whitespace-separated words, each title-cased, joined with hyphens (DNS-friendly VM segment). */
 export function clientSegmentFromInput(clientRaw) {
   const words = String(clientRaw || '')
     .trim()
     .split(/\s+/)
     .filter(Boolean);
-  if (words.length === 0) return '';
-  if (words.length === 1) {
-    const w = words[0].replace(/[^a-zA-Z0-9]/g, '');
-    if (!w) return '';
-    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-  }
-  const letters = words
-    .map((w) => {
-      const c = w.replace(/[^a-zA-Z0-9]/g, '');
-      return c ? c[0].toUpperCase() : '';
-    })
-    .filter(Boolean)
-    .join('');
-  return letters;
+  const parts = words.map((w) => titleCaseWordToken(w)).filter(Boolean);
+  return parts.join('-');
 }
 
 export async function getAccessUserConfig(userid) {

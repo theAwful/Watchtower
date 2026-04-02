@@ -73,7 +73,6 @@ const Proxmox = () => {
   const [operators, setOperators] = useState([]);
   const [operatorsLoading, setOperatorsLoading] = useState(false);
   const [operatorsError, setOperatorsError] = useState(null);
-  const [operatorsGroup, setOperatorsGroup] = useState('');
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [namePreview, setNamePreview] = useState('');
   const [namePreviewLoading, setNamePreviewLoading] = useState(false);
@@ -161,7 +160,6 @@ const Proxmox = () => {
         const res = await api.get('/api/proxmox/operators');
         if (cancelled) return;
         setOperators(res.data.operators || []);
-        setOperatorsGroup(res.data.group || '');
       } catch (err) {
         if (!cancelled) {
           setOperators([]);
@@ -396,7 +394,7 @@ const Proxmox = () => {
     if (!namePreview) {
       setSnackbar({
         open: true,
-        message: 'Enter a client name that produces a valid VM name (see preview below).',
+        message: 'Enter a client name to see the VM name preview.',
         severity: 'warning',
       });
       return;
@@ -768,11 +766,6 @@ const Proxmox = () => {
               {operatorsError ? (
                 <Alert severity="warning">{operatorsError}</Alert>
               ) : null}
-              {operatorsGroup && !operatorsError ? (
-                <Typography variant="caption" color="text.secondary">
-                  Operators are members of Proxmox group <strong>{operatorsGroup}</strong>.
-                </Typography>
-              ) : null}
 
               <TextField
                 fullWidth
@@ -780,19 +773,11 @@ const Proxmox = () => {
                 label="Client name"
                 value={createConfig.clientName}
                 onChange={(e) => setCreateConfig({ ...createConfig, clientName: e.target.value })}
-                placeholder="e.g. Acme Red Team"
+                placeholder="e.g. Old Glory Bank"
                 disabled={createSubmitting}
-                helperText="One word is title-cased; several words use the first letter of each word (e.g. Acme Red Team → ART)."
               />
-              <Typography variant="caption" color="text.secondary" display="block">
-                VM name:{' '}
-                <strong>
-                  {namePreviewLoading ? '…' : namePreview || '—'}
-                </strong>
-                {namePreview ? " (operator initials + client + today's date)" : null}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                New VMs are added to the operators pool.
+              <Typography variant="body2" sx={{ fontWeight: 600, wordBreak: 'break-all' }}>
+                {namePreviewLoading ? '…' : namePreview || '—'}
               </Typography>
             </Box>
           )}
