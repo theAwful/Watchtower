@@ -34,6 +34,7 @@ import {
   Refresh as RefreshIcon,
   Add as AddIcon,
   DeleteOutline as DeleteOutlineIcon,
+  OpenInNew as ConsoleIcon,
 } from '@mui/icons-material';
 import api from '../../models/ApiModel';
 import { useInterval } from '../../controllers/useInterval';
@@ -109,6 +110,7 @@ const Proxmox = () => {
   const [flagDeleteDialogVm, setFlagDeleteDialogVm] = useState(null);
   const [flagDeleteSubmitting, setFlagDeleteSubmitting] = useState(false);
   const [isPageVisible, setIsPageVisible] = useState(typeof document !== 'undefined' ? document.visibilityState === 'visible' : true);
+  const [consoleOpeningKey, setConsoleOpeningKey] = useState(null);
 
   const provisionCompleteFiredRef = useRef(false);
 
@@ -405,6 +407,34 @@ const Proxmox = () => {
     }
   };
 
+  const handleOpenConsole = async (vm) => {
+    if (vm.template) return;
+    const key = powerPendingKey(vm);
+    try {
+      setConsoleOpeningKey(key);
+      const typ = vmType(vm);
+      const params = new URLSearchParams({ type: typ });
+      if (vm.name) params.set('vmname', vm.name);
+      const res = await api.get(
+        `/api/proxmox/vms/${encodeURIComponent(vm.node)}/${vm.vmid}/console?${params}`,
+      );
+      const url = res.data?.url;
+      if (!url) {
+        setSnackbar({ open: true, message: 'No console URL returned', severity: 'error' });
+        return;
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      setSnackbar({
+        open: true,
+        message: err.response?.data?.error || 'Could not open console',
+        severity: 'error',
+      });
+    } finally {
+      setConsoleOpeningKey(null);
+    }
+  };
+
   const handleCreateFromTemplate = async () => {
     if (!createConfig.template) {
       setSnackbar({ open: true, message: 'Please select a template', severity: 'warning' });
@@ -470,6 +500,17 @@ const Proxmox = () => {
             <IconButton onClick={() => fetchVMs(true)} color="primary">
               <RefreshIcon />
             </IconButton>
+          </Tooltip>
+          <Tooltip title="Store Proxmox web session in this browser (needed for console when Proxmox is on the same site as Watchtower — set PROXMOX_PUBLIC_URL). Optional if you log into Proxmox directly.">
+            <Button
+              size="small"
+              variant="outlined"
+              component="a"
+              href={`${typeof window !== 'undefined' ? window.location.origin : ''}/api/proxmox/set-session?redirect=${encodeURIComponent('/proxmox')}`}
+              sx={{ ml: 1 }}
+            >
+              Proxmox session
+            </Button>
           </Tooltip>
           <Button
             variant="contained"
@@ -626,6 +667,22 @@ const Proxmox = () => {
                     </TableCell>
                     <TableCell align="center" sx={{ textAlign: 'center' }}>
                       <Box component="span" sx={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center', gap: 0 }}>
+                        <Tooltip title="Console (opens Proxmox noVNC in a new tab)">
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => handleOpenConsole(vm)}
+                              disabled={
+                                !!vm.template ||
+                                !!powerPending[powerPendingKey(vm)] ||
+                                consoleOpeningKey === powerPendingKey(vm)
+                              }
+                              color="primary"
+                            >
+                              <ConsoleIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                         <Tooltip title="Start">
                           <span>
                             <IconButton

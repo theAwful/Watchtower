@@ -118,7 +118,6 @@ function filterVmsByOperatorsPool(vms) {
  * @returns {{ ok: true } | { ok: false }} — if ok is false, res was already sent
  */
 async function requireVmInOperatorsPool(res, node, vmid, type) {
-  if (!proxmoxPoolRestrictionActive()) return { ok: true };
   const vms = await proxmox.getVMs();
   const id = parseInt(vmid, 10);
   const vm = (vms || []).find(
@@ -128,7 +127,7 @@ async function requireVmInOperatorsPool(res, node, vmid, type) {
     res.status(404).json({ error: 'VM not found' });
     return { ok: false };
   }
-  if (!isVmInOperatorsPool(vm)) {
+  if (proxmoxPoolRestrictionActive() && !isVmInOperatorsPool(vm)) {
     logEvent('proxmox_pool_access_denied', {
       node,
       vmid: id,
@@ -141,7 +140,7 @@ async function requireVmInOperatorsPool(res, node, vmid, type) {
     });
     return { ok: false };
   }
-  return { ok: true };
+  return { ok: true, vm };
 }
 
 /** Clone source must be a recognized QEMU template (same rules as GET /templates), not necessarily in VM-Operators_Pool. */
@@ -1016,7 +1015,7 @@ app.get('/api/proxmox/set-session', async (req, res) => {
   }
 });
 
-// Console: API token → vncproxy (websocket=1) → vncticket + port → return Proxmox noVNC URL. No session, no WebSocket proxy. User must be logged into Proxmox in browser for noVNC to work.
+// Console: returns Proxmox-hosted noVNC URL (vncproxy via API token). Browser must send PVEAuthCookie for that origin — use PROXMOX_PUBLIC_URL under your reverse proxy + GET /api/proxmox/set-session, or log into Proxmox in another tab.
 app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
   try {
     const { node, vmid } = req.params;
@@ -1025,6 +1024,9 @@ app.get('/api/proxmox/vms/:node/:vmid/console', async (req, res) => {
 
     const access = await requireVmInOperatorsPool(res, node, vmid, type);
     if (!access.ok) return;
+    if (access.vm?.template) {
+      return res.status(400).json({ error: 'Console is not available for template VMs' });
+    }
 
     const result = await proxmox.getVNCConsole(node, vmid, type, vmname);
     if (!result?.url) {
