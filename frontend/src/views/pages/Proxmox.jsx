@@ -776,8 +776,11 @@ const Proxmox = () => {
                 placeholder="e.g. Old Glory Bank"
                 disabled={createSubmitting}
               />
-              <Typography variant="body2" sx={{ fontWeight: 600, wordBreak: 'break-all' }}>
-                {namePreviewLoading ? '…' : namePreview || '—'}
+              <Typography variant="caption" color="text.secondary" display="block">
+                VM name:{' '}
+                <strong>
+                  {namePreviewLoading ? '…' : namePreview || '—'}
+                </strong>
               </Typography>
             </Box>
           )}
